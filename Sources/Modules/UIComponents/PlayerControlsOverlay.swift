@@ -239,6 +239,7 @@ struct PlayerControlsOverlay: View {
         .buttonStyle(PlayerIconButtonStyle())
         .disabled(!enabled)
         .help(help)
+        .accessibilityLabel(Text(help))
     }
 
     private func barButton<Label: View>(help: String, action: @escaping () -> Void, @ViewBuilder label: () -> Label) -> some View {
@@ -252,6 +253,7 @@ struct PlayerControlsOverlay: View {
         }
         .buttonStyle(PlayerIconButtonStyle())
         .help(help)
+        .accessibilityLabel(Text(help))
     }
 
     private var volumeFraction: Double {

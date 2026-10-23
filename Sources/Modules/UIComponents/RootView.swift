@@ -124,8 +124,8 @@ struct RootView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: session?.id)
-        // Video gets the whole window: no toolbar while playing (the title bar is already transparent).
-        .toolbar(session == nil ? .automatic : .hidden, for: .windowToolbar)
+        // While playing, PlayerWindowController hides the window toolbar through AppKit: SwiftUI's
+        // .toolbar(.hidden, for: .windowToolbar) would take the close / minimise / zoom buttons with it.
         #else
         sections
             .fullScreenCover(item: $session) { current in

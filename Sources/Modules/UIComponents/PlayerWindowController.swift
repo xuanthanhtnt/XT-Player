@@ -21,6 +21,7 @@ final class PlayerWindowController: NSObject, ObservableObject {
     private var levelBeforeMini: NSWindow.Level = .normal
     private var aspect: CGFloat = 0
     private var miniAfterFullScreen = false
+    private var toolbarWasVisible: Bool?
 
     func attach(_ window: NSWindow) {
         guard self.window !== window else { return }
@@ -29,11 +30,14 @@ final class PlayerWindowController: NSObject, ObservableObject {
         let fullScreen = window.styleMask.contains(.fullScreen)
         frameBeforePlayback = fullScreen ? nil : window.frame
         isFullScreen = fullScreen
+        // Video gets the whole window: the library's toolbar (sidebar button, page title…) goes away and
+        // the title bar shrinks to a standard 28 pt strip that keeps the traffic lights, as in Infuse.
+        toolbarWasVisible = window.toolbar?.isVisible
+        hideToolbar()
         refreshTitlebarHeight()
         showWindowButtons()
-        // Hiding the window toolbar for playback (RootView) also hides the close / minimise / zoom
-        // buttons; they are put back once that update has been applied.
-        DispatchQueue.main.async { [weak self] in self?.showWindowButtons() }
+        // The title bar's new height is only known after AppKit's next layout pass.
+        DispatchQueue.main.async { [weak self] in self?.refreshTitlebarHeight() }
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(willEnterFullScreen(_:)), name: NSWindow.willEnterFullScreenNotification, object: window)
         center.addObserver(self, selector: #selector(didEnterFullScreen(_:)), name: NSWindow.didEnterFullScreenNotification, object: window)
@@ -47,6 +51,8 @@ final class PlayerWindowController: NSObject, ObservableObject {
         NotificationCenter.default.removeObserver(self)
         guard let window else { return }
         setTitlebarButtonsVisible(true, animated: false)
+        if let toolbarWasVisible { window.toolbar?.isVisible = toolbarWasVisible }
+        toolbarWasVisible = nil
         window.contentResizeIncrements = NSSize(width: 1, height: 1) // clears the aspect-ratio lock
         if isMini { window.level = levelBeforeMini }
         if !window.styleMask.contains(.fullScreen), let frame = frameBeforePlayback, frame != window.frame {
@@ -173,8 +179,14 @@ final class PlayerWindowController: NSObject, ObservableObject {
     }
 
     @objc private func didResize(_ notification: Notification) {
+        hideToolbar()
         refreshTitlebarHeight()
         showWindowButtons()
+    }
+
+    private func hideToolbar() {
+        guard let toolbar = window?.toolbar, toolbar.isVisible else { return }
+        toolbar.isVisible = false
     }
 
     /// The traffic lights stay available while a video plays (they only fade with the controls).
@@ -189,6 +201,7 @@ final class PlayerWindowController: NSObject, ObservableObject {
 
     /// Fades the close / minimise / zoom buttons with the player controls (windowed only).
     func setTitlebarButtonsVisible(_ visible: Bool, animated: Bool = true) {
+        if visible, self.window != nil, toolbarWasVisible != nil { hideToolbar() }
         refreshTitlebarHeight()
         if visible { showWindowButtons() }
         guard let window, let buttons = window.standardWindowButton(.closeButton)?.superview else { return }
