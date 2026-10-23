@@ -29,6 +29,7 @@ final class PlayerWindowController: NSObject, ObservableObject {
         self.window = window
         let fullScreen = window.styleMask.contains(.fullScreen)
         frameBeforePlayback = fullScreen ? nil : window.frame
+        Self.log("attach", window)
         isFullScreen = fullScreen
         // Video gets the whole window: the library's toolbar (sidebar button, page title…) goes away and
         // the title bar shrinks to a standard 28 pt strip that keeps the traffic lights, as in Infuse.
@@ -50,13 +51,17 @@ final class PlayerWindowController: NSObject, ObservableObject {
     func detach() {
         NotificationCenter.default.removeObserver(self)
         guard let window else { return }
+        Self.log("detach", window)
         setTitlebarButtonsVisible(true, animated: false)
-        if let toolbarWasVisible { window.toolbar?.isVisible = toolbarWasVisible }
-        toolbarWasVisible = nil
         window.contentResizeIncrements = NSSize(width: 1, height: 1) // clears the aspect-ratio lock
         if isMini { window.level = levelBeforeMini }
-        if !window.styleMask.contains(.fullScreen), let frame = frameBeforePlayback, frame != window.frame {
-            window.setFrame(frame, display: true, animate: true)
+        // The toolbar comes back first (AppKit may grow the window for it), then the frame from before
+        // playback is put back — again after SwiftUI's next layout pass, which can resize the window too.
+        if let toolbarWasVisible { window.toolbar?.isVisible = toolbarWasVisible }
+        toolbarWasVisible = nil
+        Self.log("toolbar restored", window)
+        if !window.styleMask.contains(.fullScreen), let frame = frameBeforePlayback {
+            Self.restore(window, to: frame, pass: 0)
         }
         self.window = nil
         frameBeforePlayback = nil
@@ -64,6 +69,26 @@ final class PlayerWindowController: NSObject, ObservableObject {
         miniAfterFullScreen = false
         isMini = false
         aspect = 0
+    }
+
+    private static func restore(_ window: NSWindow, to frame: NSRect, pass: Int) {
+        if window.frame.integral != frame.integral {
+            window.setFrame(frame, display: true, animate: false)
+        }
+        log("restore pass \(pass)", window)
+        guard pass < 3 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (pass == 0 ? 0 : 0.15)) {
+            guard !window.styleMask.contains(.fullScreen) else { return }
+            restore(window, to: frame, pass: pass + 1)
+        }
+    }
+
+    /// Window geometry in the player log (Cài đặt ▸ Nhật ký trình phát), for diagnosing resize issues.
+    private static func log(_ event: String, _ window: NSWindow) {
+        let f = window.frame, c = window.contentLayoutRect
+        let toolbar = window.toolbar.map { $0.isVisible ? "on" : "off" } ?? "none"
+        MPVLogBuffer.shared.append(String(format: "[xt] window %@: frame %.0f,%.0f %.0f×%.0f · layout h %.0f · toolbar %@",
+                                          event, f.minX, f.minY, f.width, f.height, c.height, toolbar))
     }
 
     // MARK: Video shape
@@ -86,6 +111,7 @@ final class PlayerWindowController: NSObject, ObservableObject {
     /// Keeps the width (or the mini size) and the top-left corner, fits the height to the video.
     private func resizeToAspect() {
         guard let window, let visible = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
+        defer { Self.log(isMini ? "mini" : "fit video", window) }
         let shape = aspect > 0 ? aspect : 16.0 / 9.0
         let current = window.contentRect(forFrameRect: window.frame)
         let wanted = isMini ? max(400, (visible.width * 0.3).rounded()) : current.width
