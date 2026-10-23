@@ -817,12 +817,18 @@ final class MPVPlayerEngine: ObservableObject {
 
     private func refreshAudioDevices(_ mpv: OpaquePointer) {
         var list: [AudioDevice] = []
+        let current = getString(mpv, "audio-device") ?? "auto"
         for i in 0..<max(0, getInt(mpv, "audio-device-list/count")) {
             guard let name = getString(mpv, "audio-device-list/\(i)/name") else { continue }
-            let description = getString(mpv, "audio-device-list/\(i)/description") ?? name
-            list.append(AudioDevice(id: name, description: name == "auto" ? "Mặc định hệ thống" : description))
+            let description = name == "auto" ? "Mặc định hệ thống" : (getString(mpv, "audio-device-list/\(i)/description") ?? name)
+            // Each output lists every device (coreaudio/…, avfoundation/…): show a device once, keeping
+            // the entry in use, else the first (CoreAudio comes first in the "ao" chain).
+            if let index = list.firstIndex(where: { $0.description == description }) {
+                if name == current { list[index] = AudioDevice(id: name, description: description) }
+                continue
+            }
+            list.append(AudioDevice(id: name, description: description))
         }
-        let current = getString(mpv, "audio-device") ?? "auto"
         publish {
             $0.audioDevices = list
             $0.audioDevice = current
