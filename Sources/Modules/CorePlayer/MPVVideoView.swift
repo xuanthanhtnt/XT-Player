@@ -22,8 +22,10 @@ final class MPVMetalLayer: CAMetalLayer {
         }
     }
 
+    #if !os(tvOS)
     // target-colorspace-hint toggles EDR from mpv's render thread, but the display only switches to
-    // EDR when the property changes on the main thread.
+    // EDR when the property changes on the main thread. (tvOS has no EDR flag: the PQ/HLG colorspace on
+    // the layer plus AVDisplayManager's mode switch carry HDR there.)
     override var wantsExtendedDynamicRangeContent: Bool {
         get { super.wantsExtendedDynamicRangeContent }
         set {
@@ -34,6 +36,7 @@ final class MPVMetalLayer: CAMetalLayer {
             }
         }
     }
+    #endif
 }
 
 /// Platform view hosting the Metal layer.

@@ -31,3 +31,7 @@ if [ $status -ne 0 ]; then
 fi
 
 grep -E "^\*\* .* SUCCEEDED \*\*|Executed [0-9]+ tests?" "$LOG" | tail -n 5 || true
+# Surface the test summary as an annotation so it is visible without opening the log.
+summary=$(grep -E "Executed [0-9]+ tests?, with [0-9]+ failures?" "$LOG" | tail -n 1 | sed -E 's/^[[:space:]]+//')
+[ -n "$summary" ] && echo "::notice title=Tests::${summary}"
+exit 0

@@ -33,7 +33,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Toolchain
         run: |
@@ -56,7 +56,7 @@ jobs:
 
       - name: Upload test log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: test-log
           path: build-test.log
@@ -83,7 +83,7 @@ jobs:
             destination: generic/platform=macOS
             sdk_dir: macos
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Generate Xcode project
         run: |
@@ -92,7 +92,7 @@ jobs:
           xcodegen generate
 
       - name: Cache Swift packages (MPVKit binaries)
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.SPM_DIR }}
           key: spm-${{ runner.os }}-${{ hashFiles('project.yml') }}
@@ -152,7 +152,28 @@ jobs:
             for f in dist/*; do echo "| $(basename "$f") | $(du -h "$f" | cut -f1) |"; done
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - name: Verify bundle
+        run: |
+          set -euo pipefail
+          APP="build/XTPlayer-${{ matrix.platform }}.xcarchive/Products/Applications/XTPlayer.app"
+          if [ "${{ matrix.platform }}" = "macOS" ]; then
+            RES="$APP/Contents/Resources"; PLIST="$APP/Contents/Info.plist"; BIN="$APP/Contents/MacOS/XTPlayer"; FW="$APP/Contents/Frameworks"
+          else
+            RES="$APP"; PLIST="$APP/Info.plist"; BIN="$APP/XTPlayer"; FW="$APP/Frameworks"
+          fi
+          plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$PLIST" 2>/dev/null || echo "-"; }
+          MINOS=$(plist MinimumOSVersion); [ "$MINOS" = "-" ] && MINOS=$(plist LSMinimumSystemVersion)
+          ICON_NAME=$(plist CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName); [ "$ICON_NAME" = "-" ] && ICON_NAME=$(plist CFBundleIconName)
+          ICONS=$(xcrun assetutil --info "$RES/Assets.car" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sum(1 for r in d if "Icon" in str(r.get("Name","")) or "Shelf" in str(r.get("Name",""))))')
+          LIBMPV=$( (nm -gU "$BIN" 2>/dev/null | grep -q " _mpv_create$" && echo static) || (otool -L "$BIN" | grep -qi mpv && echo dynamic) || echo MISSING)
+          FWS=$( [ -d "$FW" ] && ls "$FW" | tr '\n' ' ' || echo none)
+          MSG="$(plist CFBundleIdentifier) v$(plist CFBundleShortVersionString) ($(plist CFBundleVersion)) · min OS $MINOS · $(lipo -archs "$BIN") · $(du -sh "$APP" | cut -f1) · icon '$ICON_NAME' ($ICONS renditions) · libmpv $LIBMPV · frameworks: $FWS"
+          echo "$MSG"
+          echo "::notice title=${{ matrix.platform }} bundle::$MSG"
+          [ "$LIBMPV" != "MISSING" ] || { echo "::error::libmpv is not linked into the binary"; exit 1; }
+          [ "$ICONS" -gt 0 ] || { echo "::error::No app icon renditions in Assets.car"; exit 1; }
+
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ steps.package.outputs.name }}
           path: dist/*
@@ -161,7 +182,7 @@ jobs:
 
       - name: Upload build log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: build-log-${{ matrix.platform }}
           path: build-*.log
@@ -175,7 +196,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
@@ -225,7 +246,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Generate Xcode project
         run: |
@@ -233,7 +254,7 @@ jobs:
           xcodegen generate
 
       - name: Cache Swift packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.SPM_DIR }}
           key: spm-${{ runner.os }}-${{ hashFiles('project.yml') }}

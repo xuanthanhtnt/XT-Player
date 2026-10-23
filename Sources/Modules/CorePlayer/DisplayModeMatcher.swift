@@ -73,7 +73,11 @@ enum AudioSessionConfigurator {
     static func activateForMoviePlayback() {
         let session = AVAudioSession.sharedInstance()
         do {
+            #if os(iOS)
             try session.setCategory(.playback, mode: .moviePlayback, policy: .longFormVideo, options: [])
+            #else
+            try session.setCategory(.playback, mode: .moviePlayback, options: [])
+            #endif
             try session.setSupportsMultichannelContent(true)
             try session.setActive(true)
             let channels = session.maximumOutputNumberOfChannels
