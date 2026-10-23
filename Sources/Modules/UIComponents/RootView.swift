@@ -12,8 +12,11 @@ enum Route: Hashable {
 }
 
 /// Top-level sections (sidebar on Mac / iPad / Apple TV, tab bar on iPhone).
+/// The Mac sidebar is grouped like Infuse's: Library filters, then Files (servers and library folders).
 enum AppSection: Hashable {
     case home, movies, shows, sources, settings
+    case search, recent, unwatched, topRated, genres
+    case server(String), folder(String)
 }
 
 /// Starts playback from anywhere in the view tree.
@@ -57,6 +60,8 @@ struct RootView: View {
     @State private var errorMessage: String?
     @StateObject private var scanner = LibraryScanner()
     #if os(macOS)
+    @Query(sort: \MediaServer.createdAt) private var servers: [MediaServer]
+    @Query(sort: \LibraryFolder.name) private var folders: [LibraryFolder]
     /// Size of the library when playback started: it keeps it while the window takes the video's shape.
     @State private var librarySize: CGSize = .zero
     @State private var frozenLibrarySize: CGSize?
@@ -134,6 +139,66 @@ struct RootView: View {
         #endif
     }
 
+    #if os(macOS)
+    /// Infuse's sidebar: Search, Home, then "Thư viện" (library filters) and "Tệp" (servers and the
+    /// library folders, opened straight in the browser), then Settings.
+    private var sections: some View {
+        TabView(selection: $section) {
+            Tab("Tìm kiếm", systemImage: "magnifyingglass", value: AppSection.search) {
+                NavigationStack { LibrarySearchView().libraryRoutes() }
+            }
+            Tab("Trang chủ", systemImage: "house", value: AppSection.home) {
+                NavigationStack { HomeView().libraryRoutes() }
+            }
+            TabSection("Thư viện") {
+                Tab("Phim", systemImage: "film", value: AppSection.movies) {
+                    NavigationStack { LibraryGridView(filter: .movies).libraryRoutes() }
+                }
+                Tab("TV Shows", systemImage: "tv", value: AppSection.shows) {
+                    NavigationStack { LibraryGridView(filter: .shows).libraryRoutes() }
+                }
+                Tab("Mới thêm", systemImage: "clock.arrow.circlepath", value: AppSection.recent) {
+                    NavigationStack { LibraryGridView(filter: .recent).libraryRoutes() }
+                }
+                Tab("Chưa xem", systemImage: "eye.slash", value: AppSection.unwatched) {
+                    NavigationStack { LibraryGridView(filter: .unwatched).libraryRoutes() }
+                }
+                Tab("Điểm cao", systemImage: "star", value: AppSection.topRated) {
+                    NavigationStack { LibraryGridView(filter: .topRated).libraryRoutes() }
+                }
+                Tab("Thể loại", systemImage: "theatermasks", value: AppSection.genres) {
+                    NavigationStack { GenresView().libraryRoutes() }
+                }
+            }
+            TabSection("Tệp") {
+                ForEach(servers) { server in
+                    Tab(server.name, systemImage: server.kind.icon, value: AppSection.server(server.id)) {
+                        NavigationStack { BrowserView(serverID: server.id, path: "", title: server.name).libraryRoutes() }
+                    }
+                }
+                ForEach(folders) { folder in
+                    Tab(folder.name, systemImage: "folder", value: AppSection.folder(folder.key)) {
+                        NavigationStack { BrowserView(serverID: folder.serverID, path: folder.path, title: folder.name).libraryRoutes() }
+                    }
+                }
+                Tab("Nguồn", systemImage: "externaldrive.badge.plus", value: AppSection.sources) {
+                    NavigationStack { SourcesView().libraryRoutes() }
+                }
+            }
+            Tab("Cài đặt", systemImage: "gearshape", value: AppSection.settings) {
+                NavigationStack { SettingsView().libraryRoutes() }
+            }
+        }
+        .tabViewStyle(.sidebarAdaptable)
+        .onChange(of: servers.map(\.id)) { _, ids in
+            // A removed server or folder must not leave the sidebar pointing at nothing.
+            if case let .server(id) = section, !ids.contains(id) { section = .sources }
+        }
+        .onChange(of: folders.map(\.key)) { _, keys in
+            if case let .folder(key) = section, !keys.contains(key) { section = .sources }
+        }
+    }
+    #else
     private var sections: some View {
         TabView(selection: $section) {
             Tab("Trang chủ", systemImage: "house.fill", value: AppSection.home) {
@@ -154,6 +219,7 @@ struct RootView: View {
         }
         .tabViewStyle(.sidebarAdaptable)
     }
+    #endif
 
     static let playableTypes: [UTType] = {
         var types: [UTType] = [.movie, .video, .audiovisualContent, .mpeg4Movie, .quickTimeMovie, .mpeg2TransportStream, .avi, .audio]
