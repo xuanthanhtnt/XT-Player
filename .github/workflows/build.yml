@@ -171,7 +171,18 @@ jobs:
             codesign --verify --deep --strict "$APP" && echo "codesign: valid (ad-hoc)"
             codesign -d --entitlements :- "$APP" 2>/dev/null | grep -c "<key>" | xargs -I{} echo "entitlements: {} keys"
           fi
-          if grep -qi "Libmpv.framework" <<<"$LINKED" && [ -e "$FW/Libmpv.framework" ]; then LIBMPV="embedded"; else LIBMPV="MISSING"; fi
+          MPVBIN=$(find "$FW/Libmpv.framework" -maxdepth 3 -type f -name Libmpv | head -n 1)
+          MPVTYPE=$( [ -n "$MPVBIN" ] && file -b "$MPVBIN" | cut -c1-60 || echo "-")
+          echo "otool -L:"; echo "$LINKED" | head -n 40
+          echo "Libmpv binary: $MPVBIN ($MPVTYPE)"
+          if grep -qi "Libmpv" <<<"$LINKED"; then
+            LIBMPV="dynamic"
+          elif grep -aq "target-colorspace-hint" "$BIN"; then
+            LIBMPV="static"
+          else
+            LIBMPV="MISSING"
+          fi
+          echo "::notice title=${{ matrix.platform }} libmpv::linkage=$LIBMPV · embedded Libmpv: $MPVTYPE · $(grep -c "framework" <<<"$LINKED") frameworks linked"
           ICON_KEYS=$(plutil -convert json -o - "$PLIST" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(",".join(sorted(k for k in d if "Icon" in k or "TopShelf" in k)))')
           FWS=$( [ -d "$FW" ] && ls "$FW" | tr '\n' ' ' || echo none)
           MSG="$(plist CFBundleIdentifier) v$(plist CFBundleShortVersionString) ($(plist CFBundleVersion)) · min OS $MINOS · $(lipo -archs "$BIN") · $(du -sh "$APP" | cut -f1) · icon '$ICON_NAME' [$ICON_KEYS] ($ICONS renditions) · libmpv $LIBMPV · frameworks: $FWS"
