@@ -56,6 +56,11 @@ struct RootView: View {
     @State private var showURLSheet = false
     @State private var errorMessage: String?
     @StateObject private var scanner = LibraryScanner()
+    #if os(macOS)
+    /// Size of the library when playback started: it keeps it while the window takes the video's shape.
+    @State private var librarySize: CGSize = .zero
+    @State private var frozenLibrarySize: CGSize?
+    #endif
 
     var body: some View {
         content
@@ -93,13 +98,29 @@ struct RootView: View {
     private var content: some View {
         #if os(macOS)
         ZStack {
-            // The library stays alive underneath so its navigation survives playback.
+            // The library stays alive underneath so its navigation survives playback. Meanwhile it keeps its
+            // size and sets no minimum window size, so the window can take the video's shape (or shrink to
+            // the mini player) without the sidebar collapsing behind it.
+            let frozen = frozenLibrarySize
             sections
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+                    if session == nil { librarySize = size }
+                }
+                .frame(width: frozen?.width, height: frozen?.height)
+                .frame(minWidth: frozen == nil ? nil : 0, maxWidth: frozen == nil ? nil : .infinity,
+                       minHeight: frozen == nil ? nil : 0, maxHeight: frozen == nil ? nil : .infinity)
                 .opacity(session == nil ? 1 : 0)
                 .allowsHitTesting(session == nil)
             if let session {
                 PlayerScreen(session: session) { self.session = nil }
                     .transition(.opacity)
+            }
+        }
+        .onChange(of: session?.id) { _, id in
+            if id == nil {
+                frozenLibrarySize = nil
+            } else if frozenLibrarySize == nil, librarySize.width > 0 {
+                frozenLibrarySize = librarySize
             }
         }
         .animation(.easeInOut(duration: 0.2), value: session?.id)

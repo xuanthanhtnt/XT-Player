@@ -31,6 +31,9 @@ enum DynamicRange: String {
 struct VideoSignal: Equatable {
     var width = 0
     var height = 0
+    /// Display size (sample aspect ratio applied), e.g. 854×480 for an anamorphic DVD.
+    var displayWidth = 0
+    var displayHeight = 0
     var fps: Double = 0
     var gamma = ""
     var primaries = ""
@@ -44,6 +47,13 @@ struct VideoSignal: Equatable {
         case "hlg": return .hlg
         default: return .sdr
         }
+    }
+
+    /// Width / height of the picture as shown; 0 until mpv knows it.
+    var displayAspect: Double {
+        if displayWidth > 0, displayHeight > 0 { return Double(displayWidth) / Double(displayHeight) }
+        if width > 0, height > 0 { return Double(width) / Double(height) }
+        return 0
     }
 
     var resolutionLabel: String {
@@ -387,19 +397,10 @@ final class MPVPlayerEngine: ObservableObject {
         setProperty("sub-scale", String(format: "%.2f", target))
     }
 
+    /// Fit / Fill / Stretch are applied by `MPVVideoView` (a compositor transform of the picture), so mpv
+    /// keeps rendering the whole picture and no swapchain is rebuilt.
     func setVideoFit(_ fit: VideoFit) {
         videoFit = fit
-        switch fit {
-        case .fit:
-            setProperty("keepaspect", "yes")
-            setProperty("panscan", "0")
-        case .fill:
-            setProperty("keepaspect", "yes")
-            setProperty("panscan", "1")
-        case .stretch:
-            setProperty("panscan", "0")
-            setProperty("keepaspect", "no")
-        }
     }
 
     func selectChapter(_ index: Int) { setProperty("chapter", "\(index)") }
@@ -482,6 +483,8 @@ final class MPVPlayerEngine: ObservableObject {
             ("sub-pos", "\(options.subtitlePosition)"),
             ("sub-border-style", options.subtitleBackground ? "background-box" : "outline-and-shadow"),
             ("sub-back-color", options.subtitleBackground ? "#99000000" : "#80000000"),
+            // Keep subtitles inside the picture: the surface's own black bars are cropped by MPVVideoView.
+            ("sub-use-margins", "no"),
             ("deinterlace", options.deinterlace),
             // Audio.
             ("volume-max", "150"),
@@ -489,6 +492,8 @@ final class MPVPlayerEngine: ObservableObject {
             ("input-default-bindings", "no"),
             ("input-vo-keyboard", "no"),
             ("osc", "no"),
+            ("osd-level", "0"),
+            ("osd-bar", "no"),
             ("load-scripts", "no"),
             ("ytdl", "no"),
         ]
@@ -538,6 +543,8 @@ final class MPVPlayerEngine: ObservableObject {
             ("sub-delay", MPV_FORMAT_DOUBLE),
             ("video-params/w", MPV_FORMAT_INT64),
             ("video-params/h", MPV_FORMAT_INT64),
+            ("video-params/dw", MPV_FORMAT_INT64),
+            ("video-params/dh", MPV_FORMAT_INT64),
             ("video-params/gamma", MPV_FORMAT_STRING),
             ("video-params/primaries", MPV_FORMAT_STRING),
             ("video-params/colormatrix", MPV_FORMAT_STRING),
@@ -675,6 +682,10 @@ final class MPVPlayerEngine: ObservableObject {
             let v = int(); updateVideo { $0.width = v }
         case "video-params/h":
             let v = int(); updateVideo { $0.height = v }
+        case "video-params/dw":
+            let v = int(); updateVideo { $0.displayWidth = v }
+        case "video-params/dh":
+            let v = int(); updateVideo { $0.displayHeight = v }
         case "video-params/gamma":
             let v = string(); updateVideo { $0.gamma = v }
         case "video-params/primaries":
