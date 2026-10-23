@@ -309,6 +309,8 @@ struct WelcomeHero: View {
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.accent)
                 .controlSize(.large)
+                #endif
+                #if !os(tvOS)
                 Button {
                     NotificationCenter.default.post(name: .xtOpenFileRequested, object: nil)
                 } label: {
