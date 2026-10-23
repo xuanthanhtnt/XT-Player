@@ -65,4 +65,15 @@ final class FilenameParserTests: XCTestCase {
         XCTAssertEqual(p.displayTitle, "Home Movie")
         XCTAssertTrue(p.badges.isEmpty)
     }
+
+    func testFolderNamesParseAsTitleAndYear() {
+        let p = FilenameParser.parse("Dune Part Two (2024)")
+        XCTAssertEqual(p.title, "Dune Part Two")
+        XCTAssertEqual(p.year, 2024)
+    }
+
+    func testSubtitleExtensionsAreKnown() {
+        XCTAssertTrue(FilenameParser.subtitleExtensions.contains("ass"))
+        XCTAssertFalse(FilenameParser.videoExtensions.contains("srt"))
+    }
 }

@@ -32,7 +32,7 @@ struct OpenURLSheet: View {
             if invalid {
                 Text("URL chưa hợp lệ. Hỗ trợ: http, https, ftp, rtsp, rtmp.")
                     .font(.footnote)
-                    .foregroundStyle(Theme.red)
+                    .foregroundStyle(Theme.danger)
             }
 
             HStack {

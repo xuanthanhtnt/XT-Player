@@ -5,8 +5,15 @@ import SwiftUI
 struct PlayerControlsOverlay: View {
     @ObservedObject var engine: MPVPlayerEngine
     let title: String
+    var subtitle: String?
     let resumedFrom: Double?
+    var hasNext = false
+    var hasPrevious = false
+    var skipBack: Double = 10
+    var skipForward: Double = 30
     let onClose: () -> Void
+    var onNext: () -> Void = {}
+    var onPrevious: () -> Void = {}
     let onInteraction: () -> Void
 
     @State private var scrubPosition: Double?
@@ -53,10 +60,13 @@ struct PlayerControlsOverlay: View {
             .buttonStyle(.plain)
             #endif
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(title)
                     .font(.title3.weight(.bold))
                     .lineLimit(1)
+                if let subtitle {
+                    Text(subtitle).font(.callout).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                }
                 SignalBadges(engine: engine)
             }
             Spacer(minLength: 0)
@@ -81,10 +91,12 @@ struct PlayerControlsOverlay: View {
 
     #if !os(tvOS)
     private var centerTransport: some View {
-        HStack(spacing: 48) {
-            transportButton("gobackward.10", size: 30) { engine.seek(by: -10) }
+        HStack(spacing: 40) {
+            if hasPrevious { transportButton("backward.end.fill", size: 24) { onPrevious() } }
+            transportButton(Self.skipIcon("gobackward", skipBack), size: 30) { engine.seek(by: -skipBack) }
             transportButton(playPauseIcon, size: 46) { togglePlayback() }
-            transportButton("goforward.30", size: 30) { engine.seek(by: 30) }
+            transportButton(Self.skipIcon("goforward", skipForward), size: 30) { engine.seek(by: skipForward) }
+            if hasNext { transportButton("forward.end.fill", size: 24) { onNext() } }
         }
     }
 
@@ -110,13 +122,17 @@ struct PlayerControlsOverlay: View {
             timeline
             HStack(spacing: 14) {
                 #if os(tvOS)
+                if hasPrevious { tvButton("backward.end.fill") { onPrevious() } }
                 tvButton(playPauseIcon) { togglePlayback() }
-                tvButton("gobackward.10") { engine.seek(by: -10) }
-                tvButton("goforward.30") { engine.seek(by: 30) }
+                tvButton(Self.skipIcon("gobackward", skipBack)) { engine.seek(by: -skipBack) }
+                tvButton(Self.skipIcon("goforward", skipForward)) { engine.seek(by: skipForward) }
+                if hasNext { tvButton("forward.end.fill") { onNext() } }
                 #endif
                 Spacer(minLength: 0)
+                if !engine.chapters.isEmpty { chapterMenu }
                 audioMenu
                 subtitleMenu
+                optionsMenu
                 nightModeButton
             }
         }
@@ -126,7 +142,7 @@ struct PlayerControlsOverlay: View {
     private var timeline: some View {
         VStack(spacing: 6) {
             #if os(tvOS)
-            ProgressTrack(progress: progress, buffered: bufferedProgress)
+            ProgressTrack(progress: progress, buffered: bufferedProgress, marks: chapterMarks)
                 .frame(height: 10)
             #else
             Slider(
@@ -141,6 +157,7 @@ struct PlayerControlsOverlay: View {
                 }
             )
             .tint(Theme.accent)
+            .overlay(alignment: .leading) { chapterTicks.allowsHitTesting(false) }
             #endif
             HStack {
                 Text(TimeFormat.clock(scrubPosition ?? engine.position))
@@ -217,6 +234,103 @@ struct PlayerControlsOverlay: View {
         } label: {
             menuLabel("Phụ đề", icon: "captions.bubble.fill")
         }
+    }
+
+    private var chapterMenu: some View {
+        Menu {
+            ForEach(engine.chapters) { chapter in
+                Button {
+                    engine.selectChapter(chapter.id)
+                    onInteraction()
+                } label: {
+                    let text = "\(TimeFormat.clock(chapter.time))  \(chapter.title)"
+                    if chapter.id == engine.currentChapter {
+                        Label(text, systemImage: "checkmark")
+                    } else {
+                        Text(text)
+                    }
+                }
+            }
+        } label: {
+            menuLabel("Chương", icon: "list.bullet.rectangle")
+        }
+    }
+
+    private var optionsMenu: some View {
+        Menu {
+            Section("Tốc độ: \(Self.speedText(engine.speed))") {
+                ForEach(Self.speeds, id: \.self) { value in
+                    Button {
+                        engine.setSpeed(value)
+                        onInteraction()
+                    } label: {
+                        if abs(engine.speed - value) < 0.01 {
+                            Label(Self.speedText(value), systemImage: "checkmark")
+                        } else {
+                            Text(Self.speedText(value))
+                        }
+                    }
+                }
+            }
+            Section("Khung hình") {
+                ForEach(VideoFit.allCases) { fit in
+                    Button {
+                        engine.setVideoFit(fit)
+                        onInteraction()
+                    } label: {
+                        if engine.videoFit == fit {
+                            Label(fit.label, systemImage: "checkmark")
+                        } else {
+                            Text(fit.label)
+                        }
+                    }
+                }
+            }
+            Section("Lệch tiếng: \(String(format: "%+.0f", engine.audioDelay * 1000)) ms") {
+                Button { engine.adjustAudioDelay(by: -0.05); onInteraction() } label: { Label("Tiếng sớm hơn 50 ms", systemImage: "minus.circle") }
+                Button { engine.adjustAudioDelay(by: 0.05); onInteraction() } label: { Label("Tiếng trễ hơn 50 ms", systemImage: "plus.circle") }
+                Button { engine.resetAudioDelay(); onInteraction() } label: { Label("Đặt lại", systemImage: "arrow.uturn.backward") }
+            }
+            Section("Cỡ phụ đề: \(Int((engine.subtitleScale * 100).rounded()))%") {
+                Button { engine.adjustSubtitleScale(by: 0.1); onInteraction() } label: { Label("Lớn hơn", systemImage: "textformat.size.larger") }
+                Button { engine.adjustSubtitleScale(by: -0.1); onInteraction() } label: { Label("Nhỏ hơn", systemImage: "textformat.size.smaller") }
+            }
+        } label: {
+            menuLabel("Tuỳ chọn", icon: "slider.horizontal.3")
+        }
+    }
+
+    #if !os(tvOS)
+    private var chapterTicks: some View {
+        GeometryReader { geo in
+            ForEach(Array(chapterMarks.enumerated()), id: \.offset) { _, mark in
+                Capsule()
+                    .fill(Color.white.opacity(0.7))
+                    .frame(width: 2, height: 8)
+                    .position(x: geo.size.width * mark, y: geo.size.height / 2)
+            }
+        }
+    }
+    #endif
+
+    private var chapterMarks: [Double] {
+        guard engine.duration > 0 else { return [] }
+        return engine.chapters.map { $0.time / engine.duration }.filter { $0 > 0.005 && $0 < 0.995 }
+    }
+
+    private static let speeds: [Double] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+
+    private static func speedText(_ value: Double) -> String {
+        var text = String(format: "%.2f", value)
+        while text.hasSuffix("0") { text.removeLast() }
+        if text.hasSuffix(".") { text.removeLast() }
+        return text + "×"
+    }
+
+    /// SF Symbols only ship gobackward/goforward for a few intervals.
+    private static func skipIcon(_ base: String, _ seconds: Double) -> String {
+        let s = Int(seconds)
+        return [5, 10, 15, 30, 45, 60, 75, 90].contains(s) ? "\(base).\(s)" : base
     }
 
     private var nightModeButton: some View {
@@ -323,6 +437,7 @@ struct SignalBadges: View {
 private struct ProgressTrack: View {
     let progress: Double
     let buffered: Double
+    var marks: [Double] = []
 
     var body: some View {
         GeometryReader { geo in
@@ -330,6 +445,9 @@ private struct ProgressTrack: View {
                 Capsule().fill(Color.white.opacity(0.18))
                 Capsule().fill(Color.white.opacity(0.28)).frame(width: geo.size.width * buffered)
                 Capsule().fill(Theme.brandGradient).frame(width: max(10, geo.size.width * progress))
+                ForEach(Array(marks.enumerated()), id: \.offset) { _, mark in
+                    Rectangle().fill(Color.black.opacity(0.55)).frame(width: 3).offset(x: geo.size.width * mark)
+                }
             }
         }
     }

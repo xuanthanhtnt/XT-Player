@@ -3,32 +3,44 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct HomeView: View {
-    let onPlay: (PlaybackSession) -> Void
-
     @Environment(\.modelContext) private var context
-    @Query(sort: \MediaEntry.lastPlayedAt, order: .reverse) private var recents: [MediaEntry]
+    @Environment(\.play) private var play
+    @EnvironmentObject private var scanner: LibraryScanner
+    @Query(sort: \LibraryItem.addedAt, order: .reverse) private var items: [LibraryItem]
+    @Query(sort: \MediaEntry.lastPlayedAt, order: .reverse) private var entries: [MediaEntry]
+    @Query(sort: \MediaServer.createdAt) private var servers: [MediaServer]
+    @Query private var files: [LibraryFile]
+    @State private var path: [Route] = []
     @State private var showImporter = false
     @State private var showURLSheet = false
     @State private var errorMessage: String?
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 36) {
+                VStack(alignment: .leading, spacing: 34) {
                     header
-                    actions
-                    if recents.isEmpty {
-                        emptyState
-                    } else {
-                        recentSection
+                    if scanner.isScanning || scanner.lastError != nil { scanBanner }
+                    if !continueWatching.isEmpty { continueRow }
+                    if !movies.isEmpty {
+                        ShelfRow(title: "Phim", seeAll: .grid(kind: LibraryKind.movie.rawValue)) {
+                            ForEach(movies.prefix(24)) { posterLink($0) }
+                        }
                     }
+                    if !shows.isEmpty {
+                        ShelfRow(title: "TV Shows", seeAll: .grid(kind: LibraryKind.show.rawValue)) {
+                            ForEach(shows.prefix(24)) { posterLink($0) }
+                        }
+                    }
+                    sources
+                    if items.isEmpty { libraryHint }
                     footer
                 }
-                .padding(Theme.pagePadding)
-                .frame(maxWidth: 1600, alignment: .leading)
-                .frame(maxWidth: .infinity)
+                .padding(.vertical, Theme.pagePadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(AppBackground())
+            .navigationDestination(for: Route.self) { destination($0) }
             #if os(iOS)
             .toolbar(.hidden, for: .navigationBar)
             #endif
@@ -37,7 +49,9 @@ struct HomeView: View {
         .fileImporter(isPresented: $showImporter, allowedContentTypes: Self.playableTypes, allowsMultipleSelection: false) { result in
             switch result {
             case let .success(urls):
-                if let url = urls.first { open(MediaSource.pickedFile(url)) }
+                if let url = urls.first {
+                    play(PlaybackSession(item: PlaybackFactory.local(MediaSource.pickedFile(url), context: context)))
+                }
             case let .failure(error):
                 errorMessage = error.localizedDescription
             }
@@ -48,7 +62,7 @@ struct HomeView: View {
         .sheet(isPresented: $showURLSheet) {
             OpenURLSheet { source in
                 showURLSheet = false
-                open(source)
+                play(PlaybackSession(item: PlaybackFactory.local(source, context: context)))
             }
         }
         .alert("Không mở được", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
@@ -58,6 +72,31 @@ struct HomeView: View {
         }
     }
 
+    // MARK: Data
+
+    private var movies: [LibraryItem] { items.filter { $0.kind == .movie } }
+    private var shows: [LibraryItem] { items.filter { $0.kind == .show } }
+
+    private var entriesByKey: [String: MediaEntry] {
+        Dictionary(entries.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+    }
+
+    private var continueWatching: [MediaEntry] {
+        Array(entries.filter { $0.resumePosition != nil }.prefix(16))
+    }
+
+    private func itemProgress(_ item: LibraryItem) -> (progress: Double?, watched: Bool) {
+        let byKey = entriesByKey
+        let mine = files.filter { $0.itemKey == item.key }.compactMap { byKey[$0.key] }
+        if item.kind == .movie {
+            let best = mine.max { ($0.progress ?? 0) < ($1.progress ?? 0) }
+            return (best?.resumePosition != nil ? best?.progress : nil, best?.isWatched ?? false)
+        }
+        let total = files.filter { $0.itemKey == item.key }.count
+        let watched = mine.filter(\.isWatched).count
+        return (nil, total > 0 && watched == total)
+    }
+
     // MARK: Sections
 
     private var header: some View {
@@ -65,115 +104,179 @@ struct HomeView: View {
             Image("BrandMark")
                 .resizable()
                 .scaledToFit()
-                .frame(width: headerMark, height: headerMark)
-                .shadow(color: Theme.red.opacity(0.45), radius: 18)
+                .frame(width: Self.markSize, height: Self.markSize)
             VStack(alignment: .leading, spacing: 4) {
                 Text("XT-Player")
-                    .font(.system(size: headerTitle, weight: .heavy, design: .rounded))
+                    .font(.system(size: Self.titleSize, weight: .heavy, design: .rounded))
                     .foregroundStyle(Theme.brandGradient)
                 Text("4K · HDR10 · Dolby Vision · Lossless Audio")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
-        }
-    }
-
-    private var actions: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: Theme.cardMinWidth), spacing: 20)], alignment: .leading, spacing: 20) {
-            #if !os(tvOS)
-            ActionCard(icon: "film.stack", title: "Mở tệp video", subtitle: "MKV, MP4, TS, M2TS… phát trực tiếp từ thiết bị") {
-                showImporter = true
-            }
-            #endif
-            ActionCard(icon: "network", title: "Mở URL / NAS", subtitle: "HTTP, HTTPS, FTP, RTSP từ NAS hoặc máy chủ media") {
-                showURLSheet = true
-            }
-        }
-    }
-
-    private var recentSection: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Xem gần đây")
-                .font(.title2.weight(.bold))
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: Theme.cardMinWidth), spacing: 24)], alignment: .leading, spacing: 24) {
-                ForEach(recents) { entry in
-                    Button { reopen(entry, fromStart: false) } label: {
-                        RecentCard(entry: entry)
-                    }
-                    #if os(tvOS)
-                    .buttonStyle(.card)
-                    #else
-                    .buttonStyle(.plain)
+            NavigationLink(value: Route.settings) {
+                Image(systemName: "gearshape.fill")
+                    .font(.title2)
+                    #if !os(tvOS)
+                    .frame(width: 44, height: 44)
+                    .glassPanel(cornerRadius: 22)
                     #endif
-                    .contextMenu {
-                        if entry.resumePosition != nil {
-                            Button { reopen(entry, fromStart: true) } label: { Label("Phát từ đầu", systemImage: "backward.end") }
-                        }
-                        Button(role: .destructive) {
-                            context.delete(entry)
-                            try? context.save()
-                        } label: { Label("Xoá khỏi danh sách", systemImage: "trash") }
+            }
+            #if !os(tvOS)
+            .buttonStyle(.plain)
+            #endif
+        }
+        .padding(.horizontal, Theme.pagePadding)
+    }
+
+    private var scanBanner: some View {
+        HStack(spacing: 12) {
+            if scanner.isScanning { ProgressView() }
+            Text(scanner.lastError ?? scanner.status)
+                .font(.callout)
+                .foregroundStyle(scanner.lastError == nil ? Color.secondary : Theme.danger)
+                .lineLimit(2)
+            Spacer()
+        }
+        .padding(16)
+        .glassPanel()
+        .padding(.horizontal, Theme.pagePadding)
+    }
+
+    private var continueRow: some View {
+        ShelfRow(title: "Tiếp tục xem") {
+            ForEach(continueWatching) { entry in
+                Button { resume(entry) } label: {
+                    LandscapeCard(title: entry.title, subtitle: entry.subtitle ?? remaining(entry),
+                                  imagePath: entry.artworkPath, progress: entry.progress,
+                                  icon: entry.isLocalFile ? "film" : "network")
+                }
+                .tileButtonStyle()
+                .contextMenu {
+                    Button { MediaLibrary.setWatched(true, key: entry.key, title: entry.title, in: context) } label: {
+                        Label("Đánh dấu đã xem", systemImage: "checkmark.circle")
                     }
+                    Button(role: .destructive) {
+                        context.delete(entry)
+                        try? context.save()
+                    } label: { Label("Xoá khỏi danh sách", systemImage: "trash") }
                 }
             }
         }
     }
 
-    private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Chưa có gì ở đây")
-                .font(.headline)
-            #if os(tvOS)
-            Text("Nhập URL của một tệp phim trên NAS (HTTP/WebDAV) để bắt đầu. Duyệt SMB/WebDAV trực tiếp sẽ có ở v0.2.")
-                .foregroundStyle(.secondary)
-            #else
-            Text("Mở một tệp 4K HDR10 hoặc Dolby Vision để thử lõi phát libmpv. Duyệt NAS qua SMB/WebDAV sẽ có ở v0.2.")
-                .foregroundStyle(.secondary)
-            #endif
+    private func posterLink(_ item: LibraryItem) -> some View {
+        let state = itemProgress(item)
+        return NavigationLink(value: Route.detail(itemKey: item.key)) {
+            PosterCard(item: item, progress: state.progress, watched: state.watched)
         }
-        .padding(24)
+        .tileButtonStyle()
+    }
+
+    private var sources: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Nguồn").font(.title2.weight(.bold))
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: Theme.cardMinWidth), spacing: 20)], alignment: .leading, spacing: 20) {
+                ForEach(servers) { server in
+                    NavigationLink(value: Route.browser(serverID: server.id, path: "", title: server.name)) {
+                        SourceCard(icon: server.kind.icon, title: server.name,
+                                   subtitle: "\(server.kind == .smb ? "SMB" : "WebDAV") · \(server.credentials.displayHost)")
+                    }
+                    .tileButtonStyle()
+                }
+                NavigationLink(value: Route.addServer) {
+                    SourceCard(icon: "plus.circle.fill", title: "Thêm máy chủ", subtitle: "SMB / WebDAV — tự tìm NAS trong mạng")
+                }
+                .tileButtonStyle()
+                #if !os(tvOS)
+                Button { showImporter = true } label: {
+                    SourceCard(icon: "film.stack", title: "Mở tệp video", subtitle: "MKV, MP4, TS, M2TS trên thiết bị")
+                }
+                .tileButtonStyle()
+                #endif
+                Button { showURLSheet = true } label: {
+                    SourceCard(icon: "link", title: "Mở URL", subtitle: "HTTP, HTTPS, FTP, RTSP")
+                }
+                .tileButtonStyle()
+            }
+        }
+        .padding(.horizontal, Theme.pagePadding)
+    }
+
+    private var libraryHint: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Tạo thư viện như Infuse").font(.headline)
+            Text("Thêm máy chủ SMB/WebDAV, mở thư mục phim và chọn \"Thêm vào thư viện\". XT-Player tự nhận diện phim/tập và lấy poster, nội dung, diễn viên từ TMDb (nhập API key trong Cài đặt).")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(22)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassPanel()
+        .padding(.horizontal, Theme.pagePadding)
     }
 
     private var footer: some View {
-        Text("v\(Self.version) · libmpv \(Self.engineVersion) · VideoToolbox")
+        Text("v\(Self.version) · libmpv 0.41 · VideoToolbox")
             .font(.footnote)
             .foregroundStyle(.tertiary)
+            .padding(.horizontal, Theme.pagePadding)
+    }
+
+    @ViewBuilder
+    private func destination(_ route: Route) -> some View {
+        switch route {
+        case let .grid(kind):
+            LibraryGridView(kind: LibraryKind(rawValue: kind) ?? .movie)
+        case let .detail(itemKey):
+            MediaDetailView(itemKey: itemKey)
+        case let .browser(serverID, path, title):
+            BrowserView(serverID: serverID, path: path, title: title)
+        case .addServer:
+            AddServerView()
+        case .settings:
+            SettingsView()
+        }
     }
 
     // MARK: Actions
 
-    private func open(_ source: MediaSource) {
-        let entry = MediaLibrary.touch(source, in: context)
-        try? context.save()
-        onPlay(PlaybackSession(source: source, title: entry.title, startAt: entry.resumePosition, entry: entry))
-    }
-
-    private func reopen(_ entry: MediaEntry, fromStart: Bool) {
-        guard let source = MediaSource.restore(urlString: entry.urlString, bookmark: entry.bookmark) else {
-            errorMessage = "Không tìm thấy tệp. Hãy mở lại từ trình chọn tệp."
+    private func resume(_ entry: MediaEntry) {
+        // An episode resumes with the rest of its season queued behind it.
+        if let file = PlaybackFactory.libraryFile(key: entry.key, context: context),
+           let item = items.first(where: { $0.key == file.itemKey }) {
+            let siblings = files.filter { $0.itemKey == item.key }.sorted(by: LibraryOrdering.episodes)
+            let queue = PlaybackFactory.library(siblings, item: item, context: context)
+            if let index = queue.firstIndex(where: { $0.key == entry.key }) {
+                play(PlaybackSession(items: queue, startIndex: index))
+                return
+            }
+        }
+        guard let item = PlaybackFactory.resume(entry, context: context) else {
+            errorMessage = "Không tìm thấy tệp hoặc máy chủ. Hãy mở lại từ nguồn."
             return
         }
-        if source.bookmark != entry.bookmark, let fresh = source.bookmark { entry.bookmark = fresh }
-        entry.lastPlayedAt = .now
-        try? context.save()
-        onPlay(PlaybackSession(source: source, title: entry.title, startAt: fromStart ? nil : entry.resumePosition, entry: entry))
+        play(PlaybackSession(item: item))
+    }
+
+    private func remaining(_ entry: MediaEntry) -> String? {
+        guard entry.duration > 0 else { return nil }
+        let left = max(0, entry.duration - entry.position)
+        return "Còn \(TimeFormat.clock(left))"
     }
 
     // MARK: Constants
 
     #if os(tvOS)
-    private let headerMark: CGFloat = 120
-    private let headerTitle: CGFloat = 76
+    private static let markSize: CGFloat = 110
+    private static let titleSize: CGFloat = 70
     #else
-    private let headerMark: CGFloat = 64
-    private let headerTitle: CGFloat = 40
+    private static let markSize: CGFloat = 60
+    private static let titleSize: CGFloat = 38
     #endif
 
-    static let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1"
-    static let engineVersion = "0.41"
+    static let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.2"
 
     static let playableTypes: [UTType] = {
         var types: [UTType] = [.movie, .video, .audiovisualContent, .mpeg4Movie, .quickTimeMovie, .mpeg2TransportStream, .avi, .audio]
@@ -184,97 +287,43 @@ struct HomeView: View {
     }()
 }
 
-private struct ActionCard: View {
-    let icon: String
-    let title: String
-    let subtitle: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 16) {
-                Image(systemName: icon)
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 52, height: 52)
-                    .background(Theme.brandGradient, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title).font(.headline)
-                    Text(subtitle)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(18)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            #if !os(tvOS)
-            .glassPanel()
-            .contentShape(Rectangle())
-            #endif
-        }
-        #if os(tvOS)
-        .buttonStyle(.card)
-        #else
-        .buttonStyle(.plain)
-        #endif
+enum LibraryOrdering {
+    static func episodes(_ a: LibraryFile, _ b: LibraryFile) -> Bool {
+        let sa = a.season ?? Int.max, sb = b.season ?? Int.max
+        if sa != sb { return sa < sb }
+        let ea = a.episode ?? Int.max, eb = b.episode ?? Int.max
+        if ea != eb { return ea < eb }
+        return a.fileName.localizedStandardCompare(b.fileName) == .orderedAscending
     }
 }
 
-private struct RecentCard: View {
-    let entry: MediaEntry
+struct SourceCard: View {
+    let icon: String
+    let title: String
+    let subtitle: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ZStack(alignment: .bottomLeading) {
-                LinearGradient(colors: [Color.white.opacity(0.06), Color.white.opacity(0.02)], startPoint: .top, endPoint: .bottom)
-                Image(systemName: entry.isLocalFile ? "film" : "network")
-                    .font(.system(size: 34, weight: .light))
-                    .foregroundStyle(Theme.brandGradient)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if let progress = entry.progress {
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(Color.white.opacity(0.15))
-                            Capsule().fill(Theme.brandGradient).frame(width: geo.size.width * progress)
-                        }
-                    }
-                    .frame(height: 4)
-                    .padding(10)
-                }
-            }
-            .aspectRatio(16 / 9, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(entry.title)
-                    .font(.headline)
+        HStack(spacing: 16) {
+            Image(systemName: icon)
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 52, height: 52)
+                .background(Theme.brandGradient, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline).lineLimit(1)
+                Text(subtitle)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
-                if !entry.tags.isEmpty {
-                    HStack(spacing: 6) {
-                        ForEach(entry.tags.prefix(4), id: \.self) { TagChip(text: $0, highlighted: $0 == "DV" || $0.hasPrefix("HDR")) }
-                    }
-                }
-                Text(statusLine)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
+            Spacer(minLength: 0)
         }
-        .padding(14)
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
         #if !os(tvOS)
         .glassPanel()
         .contentShape(Rectangle())
         #endif
-    }
-
-    private var statusLine: String {
-        if entry.isWatched { return "Đã xem" }
-        if let resume = entry.resumePosition {
-            return "Tiếp tục từ \(TimeFormat.clock(resume))" + (entry.duration > 0 ? " / \(TimeFormat.clock(entry.duration))" : "")
-        }
-        return entry.lastPlayedAt.formatted(.relative(presentation: .named))
     }
 }

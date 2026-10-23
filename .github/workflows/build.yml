@@ -124,6 +124,7 @@ jobs:
             -clonedSourcePackagesDirPath "$SPM_DIR" \
             -disableAutomaticPackageResolution \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            TMDB_API_KEY="${{ secrets.TMDB_API_KEY }}" \
             "${SIGNING[@]}"
 
       - name: Package
@@ -137,7 +138,7 @@ jobs:
           NAME="XTPlayer-${VERSION}-${{ github.run_number }}-${{ matrix.platform }}"
           mkdir -p dist
           if [ "${{ matrix.platform }}" = "macOS" ]; then
-            ditto -c -k --sequesterRsrc --keepParent "$APP" "dist/${NAME}.zip"
+            .github/scripts/make-dmg.sh "$APP" "dist/${NAME}.dmg"
           else
             mkdir -p Payload
             cp -R "$APP" Payload/

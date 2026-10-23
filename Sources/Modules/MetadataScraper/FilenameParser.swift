@@ -44,6 +44,8 @@ enum FilenameParser {
         "mkv", "mp4", "m4v", "mov", "avi", "wmv", "ts", "m2ts", "mts", "webm", "flv", "iso", "mpg", "mpeg", "vob", "ogm", "rmvb",
     ]
 
+    static let subtitleExtensions: Set<String> = ["srt", "ass", "ssa", "vtt", "sub", "sup", "idx", "smi"]
+
     static func parse(_ rawName: String) -> ParsedMediaName {
         var name = rawName
         if let dot = name.lastIndex(of: "."), videoExtensions.contains(name[name.index(after: dot)...].lowercased()) {

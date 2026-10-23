@@ -1,31 +1,37 @@
 import SwiftUI
 
 enum Theme {
-    static let red = Color(red: 1.0, green: 0x3B / 255, blue: 0x30 / 255)        // #FF3B30
-    static let orange = Color(red: 1.0, green: 0x95 / 255, blue: 0.0)             // #FF9500
-    static let accent = Color(red: 1.0, green: 0x5E / 255, blue: 0x1F / 255)      // #FF5E1F
-    static let background = Color(red: 0x12 / 255, green: 0x12 / 255, blue: 0x12 / 255) // #121212
+    static let leaf = Color(red: 0x34 / 255, green: 0xC7 / 255, blue: 0x59 / 255)        // #34C759
+    static let lime = Color(red: 0xA6 / 255, green: 0xE8 / 255, blue: 0x7A / 255)        // #A6E87A
+    static let forest = Color(red: 0x11 / 255, green: 0x8A / 255, blue: 0x42 / 255)      // #118A42
+    static let accent = Color(red: 0x2F / 255, green: 0xBF / 255, blue: 0x5B / 255)      // #2FBF5B
+    static let danger = Color(red: 1.0, green: 0x45 / 255, blue: 0x3A / 255)             // #FF453A
+    static let background = Color(red: 0x0E / 255, green: 0x12 / 255, blue: 0x10 / 255) // #0E1210
 
-    static let brandGradient = LinearGradient(colors: [red, orange], startPoint: .leading, endPoint: .trailing)
+    static let brandGradient = LinearGradient(colors: [lime, leaf, forest], startPoint: .topLeading, endPoint: .bottomTrailing)
 
     #if os(tvOS)
     static let pagePadding: CGFloat = 80
     static let cardMinWidth: CGFloat = 420
     static let corner: CGFloat = 28
+    static let posterWidth: CGFloat = 250
+    static let landscapeWidth: CGFloat = 440
     #else
     static let pagePadding: CGFloat = 24
     static let cardMinWidth: CGFloat = 280
     static let corner: CGFloat = 20
+    static let posterWidth: CGFloat = 140
+    static let landscapeWidth: CGFloat = 280
     #endif
 }
 
-/// Deep matte black with a faint ember glow — the backdrop for every screen.
+/// Deep matte black-green with a faint leaf glow — the backdrop for every screen.
 struct AppBackground: View {
     var body: some View {
         ZStack {
             Theme.background
-            RadialGradient(colors: [Theme.red.opacity(0.20), .clear], center: .topLeading, startRadius: 0, endRadius: 760)
-            RadialGradient(colors: [Theme.orange.opacity(0.08), .clear], center: .bottomTrailing, startRadius: 0, endRadius: 640)
+            RadialGradient(colors: [Theme.leaf.opacity(0.16), .clear], center: .topLeading, startRadius: 0, endRadius: 760)
+            RadialGradient(colors: [Theme.forest.opacity(0.10), .clear], center: .bottomTrailing, startRadius: 0, endRadius: 640)
         }
         .ignoresSafeArea()
     }

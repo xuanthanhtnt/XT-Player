@@ -1,0 +1,94 @@
+import Foundation
+import Security
+
+/// UserDefaults keys + defaults. Views bind with @AppStorage(AppSettings.x).
+enum AppSettings {
+    static let hdrPassthrough = "player.hdrPassthrough"
+    static let audioPassthrough = "player.audioPassthrough"
+    static let deinterlace = "player.deinterlace"
+    static let cacheMegabytes = "player.cacheMegabytes"
+    static let autoplayNext = "player.autoplayNext"
+    static let skipBackSeconds = "player.skipBack"
+    static let skipForwardSeconds = "player.skipForward"
+    static let subtitleLanguages = "subtitles.languages"
+    static let audioLanguages = "audio.languages"
+    static let subtitleScale = "subtitles.scale"
+    static let subtitlePosition = "subtitles.position"
+    static let subtitleBackground = "subtitles.background"
+    static let metadataLanguage = "library.language"
+
+    static func registerDefaults() {
+        #if os(macOS)
+        let cache = 1024
+        #else
+        let cache = 400
+        #endif
+        UserDefaults.standard.register(defaults: [
+            hdrPassthrough: true,
+            audioPassthrough: false,
+            deinterlace: "auto",
+            cacheMegabytes: cache,
+            autoplayNext: true,
+            skipBackSeconds: 10,
+            skipForwardSeconds: 30,
+            subtitleLanguages: "vi,vie,en,eng",
+            audioLanguages: "",
+            subtitleScale: 1.0,
+            subtitlePosition: 100,
+            subtitleBackground: false,
+            metadataLanguage: "vi-VN",
+        ])
+    }
+
+    static var defaults: UserDefaults { .standard }
+
+    /// TMDb v3 API key or v4 read-access token: user setting first, then the build-time key (CI secret).
+    static var tmdbCredential: String? {
+        if let user = Keychain.get(account: "tmdb"), !user.isEmpty { return user }
+        if let built = Bundle.main.object(forInfoDictionaryKey: "XTTMDbAPIKey") as? String,
+           !built.isEmpty, !built.hasPrefix("$(") {
+            return built
+        }
+        return nil
+    }
+}
+
+/// Minimal generic-password Keychain wrapper. Falls back to UserDefaults when the Keychain is not
+/// usable (e.g. an ad-hoc signed macOS build), so credentials still work there.
+enum Keychain {
+    private static let service = "com.xuanthanhtnt.xtplayer"
+
+    static func set(_ value: String?, account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        SecItemDelete(query as CFDictionary)
+        UserDefaults.standard.removeObject(forKey: fallbackKey(account))
+        guard let value, !value.isEmpty, let data = value.data(using: .utf8) else { return }
+        var add = query
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        if SecItemAdd(add as CFDictionary, nil) != errSecSuccess {
+            UserDefaults.standard.set(value, forKey: fallbackKey(account))
+        }
+    }
+
+    static func get(account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: CFTypeRef?
+        if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data {
+            return String(data: data, encoding: .utf8)
+        }
+        return UserDefaults.standard.string(forKey: fallbackKey(account))
+    }
+
+    private static func fallbackKey(_ account: String) -> String { "kc.fallback.\(account)" }
+}

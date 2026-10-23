@@ -3,13 +3,19 @@ import SwiftUI
 
 @main
 struct XTPlayerApp: App {
+    init() {
+        AppSettings.registerDefaults()
+        // Posters and backdrops are re-used constantly while browsing the library.
+        URLCache.shared = URLCache(memoryCapacity: 64 << 20, diskCapacity: 512 << 20)
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
         }
-        .modelContainer(for: MediaEntry.self)
+        .modelContainer(for: [MediaEntry.self, MediaServer.self, LibraryFolder.self, LibraryItem.self, LibraryFile.self])
         #if os(macOS)
         .defaultSize(width: 1280, height: 760)
         .windowToolbarStyle(.unifiedCompact)

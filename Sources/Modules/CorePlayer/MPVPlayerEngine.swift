@@ -129,8 +129,16 @@ struct PlayerOptions {
     var audioPassthrough = false
     /// Preferred subtitle languages (mpv --slang).
     var subtitleLanguages = "vi,vie,en,eng"
+    /// Preferred audio languages (mpv --alang); empty = the file's default track.
+    var audioLanguages = ""
     /// Forward demuxer cache (RAM) for high-bitrate remuxes over Wi-Fi 6 / LAN.
     var cacheMegabytes: Int
+    /// "auto" deinterlaces only frames FFmpeg flags as interlaced (DVD/broadcast rips).
+    var deinterlace = "auto"
+    /// Text subtitle appearance (ASS/SSA keep their own styling).
+    var subtitleScale = 1.0
+    var subtitlePosition = 100
+    var subtitleBackground = false
 
     static var standard: PlayerOptions {
         #if os(macOS)
@@ -138,6 +146,45 @@ struct PlayerOptions {
         #else
         return PlayerOptions(cacheMegabytes: 400)
         #endif
+    }
+
+    /// Current values from Settings.
+    static func fromSettings() -> PlayerOptions {
+        let d = UserDefaults.standard
+        var o = PlayerOptions.standard
+        o.hdrPassthrough = d.bool(forKey: AppSettings.hdrPassthrough)
+        o.audioPassthrough = d.bool(forKey: AppSettings.audioPassthrough)
+        o.subtitleLanguages = d.string(forKey: AppSettings.subtitleLanguages) ?? o.subtitleLanguages
+        o.audioLanguages = d.string(forKey: AppSettings.audioLanguages) ?? ""
+        let cache = d.integer(forKey: AppSettings.cacheMegabytes)
+        if cache >= 64 { o.cacheMegabytes = cache }
+        o.deinterlace = d.string(forKey: AppSettings.deinterlace) ?? "auto"
+        let scale = d.double(forKey: AppSettings.subtitleScale)
+        if scale > 0.2 { o.subtitleScale = scale }
+        let position = d.integer(forKey: AppSettings.subtitlePosition)
+        if position > 0 { o.subtitlePosition = position }
+        o.subtitleBackground = d.bool(forKey: AppSettings.subtitleBackground)
+        return o
+    }
+}
+
+struct Chapter: Identifiable, Hashable {
+    let id: Int
+    let title: String
+    let time: Double
+}
+
+enum VideoFit: String, CaseIterable, Identifiable {
+    case fit, fill, stretch
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .fit: return "Vừa khung (giữ tỉ lệ)"
+        case .fill: return "Lấp đầy (cắt viền)"
+        case .stretch: return "Kéo giãn"
+        }
     }
 }
 
@@ -162,6 +209,12 @@ final class MPVPlayerEngine: ObservableObject {
     @Published private(set) var subtitleDelay: Double = 0
     @Published private(set) var nightMode = false
     @Published private(set) var hdrOutputActive = false
+    @Published private(set) var chapters: [Chapter] = []
+    @Published private(set) var currentChapter = -1
+    @Published private(set) var speed: Double = 1
+    @Published private(set) var audioDelay: Double = 0
+    @Published private(set) var subtitleScale: Double = 1
+    @Published private(set) var videoFit: VideoFit = .fit
 
     let options: PlayerOptions
 
@@ -170,9 +223,10 @@ final class MPVPlayerEngine: ObservableObject {
     private var lastPublishedTime: Double = -1  // queue only
     private var isPaused = false                // queue only
     private var reachedEOF = false              // queue only
+    private var pendingSubtitles: [String] = [] // queue only: sidecar subtitles for the file being loaded
 
     private var attached = false                // main only
-    private var pendingLoad: (location: String, start: Double?)?
+    private var pendingLoad: (location: String, start: Double?, subtitles: [String])?
     private var retainedLayer: MPVMetalLayer?
     private weak var hostView: MPVVideoView?
     private var notificationTokens: [NSObjectProtocol] = []
@@ -180,7 +234,7 @@ final class MPVPlayerEngine: ObservableObject {
     private let displayMatcher = DisplayModeMatcher()
     #endif
 
-    init(options: PlayerOptions = .standard) {
+    init(options: PlayerOptions = .fromSettings()) {
         self.options = options
     }
 
@@ -210,7 +264,7 @@ final class MPVPlayerEngine: ObservableObject {
         observeAppLifecycle()
         if let pending = pendingLoad {
             pendingLoad = nil
-            load(pending.location, startAt: pending.start)
+            load(pending.location, startAt: pending.start, externalSubtitles: pending.subtitles)
         }
     }
 
@@ -238,13 +292,19 @@ final class MPVPlayerEngine: ObservableObject {
 
     // MARK: Commands
 
-    func load(_ location: String, startAt start: Double? = nil) {
+    /// Loads a file (replacing the current one). `externalSubtitles` are sidecar files (local paths or
+    /// URLs, including xtsmb://) added once the file is open.
+    func load(_ location: String, startAt start: Double? = nil, externalSubtitles: [String] = []) {
         guard attached else {
-            pendingLoad = (location, start)
+            pendingLoad = (location, start, externalSubtitles)
             return
         }
         state = .loading
+        position = 0
+        duration = 0
+        chapters = []
         queue.async {
+            self.pendingSubtitles = externalSubtitles
             var args = ["loadfile", location, "replace", "-1"]
             if let start, start > 0 { args.append("start=\(Int(start))") }
             self.command(args)
@@ -273,6 +333,40 @@ final class MPVPlayerEngine: ObservableObject {
     }
 
     func resetSubtitleDelay() { setProperty("sub-delay", "0") }
+
+    func setSpeed(_ value: Double) { setProperty("speed", String(format: "%.2f", value)) }
+
+    func adjustAudioDelay(by delta: Double) {
+        queue.async { self.command(["add", "audio-delay", String(format: "%.3f", delta)]) }
+    }
+
+    func resetAudioDelay() { setProperty("audio-delay", "0") }
+
+    func adjustSubtitleScale(by delta: Double) {
+        let target = min(3, max(0.4, subtitleScale + delta))
+        setProperty("sub-scale", String(format: "%.2f", target))
+    }
+
+    func setVideoFit(_ fit: VideoFit) {
+        videoFit = fit
+        switch fit {
+        case .fit:
+            setProperty("keepaspect", "yes")
+            setProperty("panscan", "0")
+        case .fill:
+            setProperty("keepaspect", "yes")
+            setProperty("panscan", "1")
+        case .stretch:
+            setProperty("panscan", "0")
+            setProperty("keepaspect", "no")
+        }
+    }
+
+    func selectChapter(_ index: Int) { setProperty("chapter", "\(index)") }
+
+    func skipChapter(_ step: Int) {
+        queue.async { self.command(["add", "chapter", "\(step)"]) }
+    }
 
     /// Night mode: dynamic range compression + loudness normalisation (FFmpeg dynaudnorm).
     func setNightMode(_ enabled: Bool) {
@@ -322,6 +416,11 @@ final class MPVPlayerEngine: ObservableObject {
             ("subs-fallback", "yes"),
             ("sub-auto", "fuzzy"),
             ("sub-file-paths", "Subs:Subtitles:subs"),
+            ("sub-scale", String(format: "%.2f", options.subtitleScale)),
+            ("sub-pos", "\(options.subtitlePosition)"),
+            ("sub-border-style", options.subtitleBackground ? "background-box" : "outline-and-shadow"),
+            ("sub-back-color", options.subtitleBackground ? "#99000000" : "#80000000"),
+            ("deinterlace", options.deinterlace),
             // Audio.
             ("audio-channels", "auto"),
             ("volume-max", "150"),
@@ -332,6 +431,7 @@ final class MPVPlayerEngine: ObservableObject {
             ("load-scripts", "no"),
             ("ytdl", "no"),
         ]
+        if !options.audioLanguages.isEmpty { settings.append(("alang", options.audioLanguages)) }
         #if os(macOS)
         settings.append(("ao", "coreaudio"))
         settings.append(("input-media-keys", "yes"))
@@ -356,6 +456,8 @@ final class MPVPlayerEngine: ObservableObject {
             return
         }
 
+        MPVStreamProtocols.register(on: mpv)
+
         let observed: [(String, mpv_format)] = [
             ("time-pos", MPV_FORMAT_DOUBLE),
             ("duration", MPV_FORMAT_DOUBLE),
@@ -376,6 +478,11 @@ final class MPVPlayerEngine: ObservableObject {
             ("hwdec-current", MPV_FORMAT_STRING),
             ("audio-params/channel-count", MPV_FORMAT_INT64),
             ("audio-params/samplerate", MPV_FORMAT_INT64),
+            ("chapter-list/count", MPV_FORMAT_INT64),
+            ("chapter", MPV_FORMAT_INT64),
+            ("speed", MPV_FORMAT_DOUBLE),
+            ("audio-delay", MPV_FORMAT_DOUBLE),
+            ("sub-scale", MPV_FORMAT_DOUBLE),
         ]
         for (name, format) in observed {
             mpv_observe_property(mpv, 0, name, format)
@@ -409,7 +516,12 @@ final class MPVPlayerEngine: ObservableObject {
                     $0.video = VideoSignal()
                 }
             case MPV_EVENT_FILE_LOADED:
+                for subtitle in pendingSubtitles {
+                    command(["sub-add", subtitle, "auto"])
+                }
+                pendingSubtitles = []
                 refreshTracks(mpv)
+                refreshChapters(mpv)
                 let paused = isPaused
                 publish { $0.state = paused ? .paused : .playing }
             case MPV_EVENT_END_FILE:
@@ -503,6 +615,20 @@ final class MPVPlayerEngine: ObservableObject {
         case "audio-params/samplerate":
             let v = int()
             publish { $0.audio.sampleRate = v }
+        case "chapter-list/count":
+            refreshChapters(mpv)
+        case "chapter":
+            let v = available ? int() : -1
+            publish { $0.currentChapter = v }
+        case "speed":
+            let v = double()
+            publish { $0.speed = v }
+        case "audio-delay":
+            let v = double()
+            publish { $0.audioDelay = v }
+        case "sub-scale":
+            let v = double()
+            publish { $0.subtitleScale = v }
         default:
             break
         }
@@ -564,6 +690,18 @@ final class MPVPlayerEngine: ObservableObject {
                 engine.video.dolbyVisionProfile = dvProfile
             }
         }
+    }
+
+    private func refreshChapters(_ mpv: OpaquePointer) {
+        let count = getInt(mpv, "chapter-list/count")
+        var list: [Chapter] = []
+        for i in 0..<max(0, count) {
+            var time = Double()
+            mpv_get_property(mpv, "chapter-list/\(i)/time", MPV_FORMAT_DOUBLE, &time)
+            let title = getString(mpv, "chapter-list/\(i)/title") ?? "Chương \(i + 1)"
+            list.append(Chapter(id: i, title: title, time: time))
+        }
+        publish { $0.chapters = list }
     }
 
     // MARK: - Display mode (tvOS Match Content)
