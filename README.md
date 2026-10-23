@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="../../actions/workflows/build.yml"><img src="../../actions/workflows/build.yml/badge.svg" alt="Build"></a>
+  <a href="https://github.com/xuanthanhtnt/XT-Player/actions/workflows/build.yml"><img src="https://github.com/xuanthanhtnt/XT-Player/actions/workflows/build.yml/badge.svg" alt="Build"></a>
 </p>
 
 ---
@@ -37,6 +37,7 @@ Mọi bản build chạy trên **GitHub Actions** (runner macOS 26) — không c
   - `XTPlayer-…-tvOS` → `…-unsigned.ipa` (Apple TV)
   - `XTPlayer-…-macOS` → `.zip` chứa `XTPlayer.app` (ký ad-hoc)
 - **Phát hành**: tạo tag `v0.1.0` (`git tag v0.1.0 && git push origin v0.1.0`) → workflow tự tạo **Release** đính kèm cả 3 tệp.
+- Artifact của mỗi run được giữ 30 ngày; Release thì giữ vĩnh viễn. Mỗi run còn tự kiểm tra gói (bundle ID, OS tối thiểu, kiến trúc, icon đã biên dịch, libmpv đã liên kết) và ghi kết quả ở phần *Annotations* của run.
 
 ### Cài đặt
 
