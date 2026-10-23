@@ -88,19 +88,27 @@ struct SettingsView: View {
                 Text("Lấy khoá miễn phí tại themoviedb.org ▸ Settings ▸ API. \(folders.count) thư mục trong thư viện.")
             }
 
-            Section("Máy chủ") {
-                if servers.isEmpty { Text("Chưa có máy chủ").foregroundStyle(.secondary) }
+            Section {
                 ForEach(servers) { server in
                     HStack {
                         Label(server.name, systemImage: server.kind.icon)
                         Spacer()
                         Text(server.displayHost).foregroundStyle(.secondary).font(.footnote)
-                        Button(role: .destructive) { remove(server) } label: { Image(systemName: "trash") }
+                        Button(role: .destructive) { SourcesView.remove(server, context: context) } label: { Image(systemName: "trash") }
                             #if !os(tvOS)
                             .buttonStyle(.borderless)
                             #endif
                     }
                 }
+                NavigationLink {
+                    DiagnosticsLogView()
+                } label: {
+                    Label("Nhật ký trình phát (chẩn đoán)", systemImage: "stethoscope")
+                }
+            } header: {
+                Text("Máy chủ & chẩn đoán")
+            } footer: {
+                Text("Nếu video không có tiếng / không phát: mở nhật ký ngay sau khi phát rồi bấm Sao chép để gửi lỗi.")
             }
 
             Section("Giới thiệu") {
@@ -109,30 +117,14 @@ struct SettingsView: View {
                 LabeledContent("SMB", value: "SMBClient (pure Swift, SMB2/3)")
             }
         }
+        #if os(macOS)
+        .formStyle(.grouped)
+        #endif
         .navigationTitle("Cài đặt")
         .onAppear {
             tmdbKey = Keychain.get(account: "tmdb") ?? ""
         }
         .onChange(of: tmdbKey) { _, _ in tmdbSaved = false }
-    }
-
-    private func remove(_ server: MediaServer) {
-        let id = server.id
-        for folder in folders where folder.serverID == id {
-            let folderKey = folder.key
-            let files = (try? context.fetch(FetchDescriptor<LibraryFile>(predicate: #Predicate { $0.folderKey == folderKey }))) ?? []
-            files.forEach { context.delete($0) }
-            context.delete(folder)
-        }
-        // Drop movies / shows that no longer have any file.
-        let remaining = Set(((try? context.fetch(FetchDescriptor<LibraryFile>())) ?? []).filter { $0.serverID != id }.map(\.itemKey))
-        for item in (try? context.fetch(FetchDescriptor<LibraryItem>())) ?? [] where !remaining.contains(item.key) {
-            context.delete(item)
-        }
-        Keychain.set(nil, account: "server.\(id)")
-        RemoteFileSystemPool.shared.reset(id)
-        context.delete(server)
-        try? context.save()
     }
 
     private static let cacheChoices = [150, 250, 400, 600, 1024, 2048]

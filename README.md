@@ -15,9 +15,9 @@
 
 ---
 
-## Trạng thái: v0.2 — Thư viện & ổ mạng kiểu Infuse
+## Trạng thái: v0.2.1 — Giao diện kiểu Infuse
 
-| Hạng mục | Có trong v0.2 |
+| Hạng mục | Có trong v0.2.1 |
 |---|---|
 | Lõi phát | libmpv 0.41 + FFmpeg 9.0.2, `vo=gpu-next` (Vulkan → MoltenVK → Metal), `hwdec=videotoolbox`, deinterlace tự động |
 | HDR | HDR10 / HLG passthrough, Dolby Vision P5/P8 qua libplacebo + libdovi, tone-map → SDR khi màn hình không hỗ trợ |
@@ -26,8 +26,9 @@
 | Phụ đề | libass (.ass giữ hiệu ứng), .srt/.vtt/PGS; **tự nạp phụ đề cạnh file trên NAS**; lệch ±0,1 s; cỡ/vị trí/nền chữ |
 | Ổ mạng | **SMB2/3** (SMBClient thuần Swift, stream thẳng vào mpv qua `xtsmb://`, không transcode), **WebDAV** (HTTP/HTTPS, Basic/Digest, chứng chỉ tự ký), **tự tìm NAS bằng Bonjour**; mật khẩu trong Keychain |
 | Thư viện | Quét thư mục NAS, nhận diện phim / tập, **poster, backdrop, diễn viên, tóm tắt, tên & ảnh từng tập từ TMDb**; hàng *Tiếp tục xem*, kệ Phim / TV Shows, trang chi tiết, chọn mùa, đánh dấu đã xem |
-| Player | Hàng đợi + **Up Next** tự chuyển tập, chapter, tốc độ 0.5–2×, Fit / Fill / Stretch, Now Playing & Control Center, chạm đúp hai bên để tua, vuốt ngang để tua (iPhone/iPad), phím tắt (Mac/iPad) |
-| macOS | Bản cài **.dmg** kéo-thả vào Applications |
+| Giao diện | Thanh bên (Mac / iPad / Apple TV) hoặc tab (iPhone): Trang chủ · Phim · TV Shows · Nguồn · Cài đặt; **banner nổi bật** tự xoay vòng, kệ *Tiếp tục xem* / *Mới thêm*; trang chi tiết nền backdrop mờ |
+| Player | Thanh điều khiển nổi (kính mờ), thanh tua có bong bóng thời gian + tên chương, **bảng Âm thanh & Phụ đề**, **bảng Thông tin** (codec, HDR, bitrate, đầu ra âm thanh, nhật ký libmpv), hàng đợi + **Up Next**, tốc độ 0.5–2×, Fit / Fill / Stretch, Now Playing, chạm đúp / vuốt để tua |
+| macOS | Bản cài **.dmg**; nút & phím **F toàn màn hình**, video co giãn theo cửa sổ, âm lượng + chọn thiết bị phát, rê chuột hiện điều khiển / tự ẩn con trỏ; phím tắt Space ← → ↑ ↓ N M I T Z X Esc |
 
 ### So với Infuse
 
@@ -106,7 +107,7 @@ XT-Player/
 └── Tests/XTPlayerTests/            # Unit test (chạy trên CI)
 ```
 
-Logo được sinh bằng code: `python3 Assets/Branding/generate_icons.py` (cần `numpy` và `playwright`) vẽ lại toàn bộ icon từ một nguồn SVG.
+Logo (thiết kế của chủ dự án) nằm ở `Assets/Branding/xt-mark-source.png`. `python3 Assets/Branding/prepare_mark.py` tách nền (cần `opencv-python`), rồi `python3 Assets/Branding/generate_icons.py` (cần `numpy` và `playwright`) sinh toàn bộ icon iOS / macOS / tvOS, Top Shelf, logo trong app và nền DMG.
 
 ## Phát triển trên Mac (không bắt buộc)
 
@@ -117,6 +118,10 @@ open XTPlayer.xcodeproj
 ```
 
 Khi chạy debug bằng Xcode, tắt *Metal API Validation* (Edit Scheme ▸ Run ▸ Diagnostics) — MoltenVK có thể crash validation khi phát HDR.
+
+## Báo lỗi phát (không tiếng, không hình…)
+
+Mở **Cài đặt ▸ Nhật ký trình phát** (hoặc nút ⓘ trong player ▸ *Nhật ký libmpv*) ngay sau khi phát lỗi, bấm **Sao chép nhật ký** và gửi kèm khi báo lỗi. Bảng ⓘ cũng cho biết đầu ra âm thanh đang dùng — nếu ghi *"Chưa mở — không có tiếng"* thì thử chọn thiết bị khác trong bảng Âm thanh & Phụ đề (Mac).
 
 ## Giới hạn kỹ thuật cần biết
 
@@ -129,7 +134,8 @@ Khi chạy debug bằng Xcode, tắt *Metal API Validation* (Edit Scheme ▸ Run
 ## Lộ trình
 
 - [x] **v0.1**: Khung SwiftUI đa nền tảng, libmpv phát 4K HDR10/DV và TrueHD/DTS, CI build cả 3 nền tảng
-- [x] **v0.2**: Logo lá xanh, macOS DMG, SMB3 và WebDAV, Bonjour, thư viện TMDb, Up Next, chapter, Now Playing, Cài đặt
+- [x] **v0.2**: macOS DMG, SMB3 và WebDAV, Bonjour, thư viện TMDb, Up Next, chapter, Now Playing, Cài đặt
+- [x] **v0.2.1**: Logo mới, giao diện kiểu Infuse (thanh bên, banner, bảng track/thông tin), sửa co giãn video & toàn màn hình trên Mac, sửa/chẩn đoán âm thanh
 - [ ] **v0.3**: Engine AVPlayer cho Dolby Vision và Atmos (Apple TV), song song với libmpv
 - [ ] **v0.4**: OpenSubtitles, scrub thumbnails, Top Shelf
 - [ ] **v0.5**: Trakt.tv sync, iCloud

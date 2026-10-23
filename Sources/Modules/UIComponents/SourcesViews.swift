@@ -269,3 +269,151 @@ struct AddServerView: View {
         dismiss()
     }
 }
+
+/// "Nguồn": servers, library folders and quick open actions — Infuse's "Shares" screen.
+struct SourcesView: View {
+    @Environment(\.modelContext) private var context
+    @EnvironmentObject private var scanner: LibraryScanner
+    @Query(sort: \MediaServer.createdAt) private var servers: [MediaServer]
+    @Query(sort: \LibraryFolder.name) private var folders: [LibraryFolder]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 34) {
+                section("Máy chủ") {
+                    ForEach(servers) { server in
+                        NavigationLink(value: Route.browser(serverID: server.id, path: "", title: server.name)) {
+                            SourceCard(icon: server.kind.icon, title: server.name,
+                                       subtitle: "\(server.kind == .smb ? "SMB" : "WebDAV") · \(server.displayHost)")
+                        }
+                        .tileButtonStyle()
+                        .contextMenu {
+                            Button(role: .destructive) { Self.remove(server, context: context) } label: {
+                                Label("Xoá máy chủ", systemImage: "trash")
+                            }
+                        }
+                    }
+                    NavigationLink(value: Route.addServer) {
+                        SourceCard(icon: "plus.circle.fill", title: "Thêm máy chủ", subtitle: "SMB / WebDAV — tự tìm NAS trong mạng")
+                    }
+                    .tileButtonStyle()
+                }
+
+                section("Mở nhanh") {
+                    #if !os(tvOS)
+                    Button {
+                        NotificationCenter.default.post(name: .xtOpenFileRequested, object: nil)
+                    } label: {
+                        SourceCard(icon: "film.stack", title: "Mở tệp video", subtitle: "MKV, MP4, TS, M2TS, ISO trên thiết bị")
+                    }
+                    .tileButtonStyle()
+                    #endif
+                    Button {
+                        NotificationCenter.default.post(name: .xtOpenURLRequested, object: nil)
+                    } label: {
+                        SourceCard(icon: "link", title: "Mở URL", subtitle: "HTTP(S), HLS, FTP, RTSP")
+                    }
+                    .tileButtonStyle()
+                }
+
+                if !folders.isEmpty {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Text("Thư mục thư viện").font(.title2.weight(.bold))
+                            Spacer()
+                            Button {
+                                Task { await scanner.scanAll(context: context) }
+                            } label: {
+                                Label(scanner.isScanning ? "Đang quét…" : "Quét lại tất cả", systemImage: "arrow.triangle.2.circlepath")
+                            }
+                            .disabled(scanner.isScanning)
+                        }
+                        if scanner.isScanning || scanner.lastError != nil {
+                            Text(scanner.lastError ?? scanner.status)
+                                .font(.footnote)
+                                .foregroundStyle(scanner.lastError == nil ? Color.secondary : Theme.danger)
+                        }
+                        ForEach(folders) { folder in
+                            NavigationLink(value: Route.browser(serverID: folder.serverID, path: folder.path, title: folder.name)) {
+                                SourceCard(icon: "folder.fill", title: folder.name, subtitle: folderDetail(folder))
+                            }
+                            .tileButtonStyle()
+                            .contextMenu {
+                                Button {
+                                    Task { await scanner.scan(folder: folder, context: context) }
+                                } label: { Label("Quét lại", systemImage: "arrow.clockwise") }
+                                Button(role: .destructive) { Self.remove(folder, context: context) } label: {
+                                    Label("Bỏ khỏi thư viện", systemImage: "minus.circle")
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, Theme.pagePadding)
+                }
+            }
+            .padding(.vertical, Theme.pagePadding / 2)
+        }
+        .background(AppBackground())
+        .navigationTitle("Nguồn")
+    }
+
+    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(title).font(.title2.weight(.bold))
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: Theme.cardMinWidth), spacing: Self.spacing)],
+                      alignment: .leading, spacing: Self.spacing) {
+                content()
+            }
+        }
+        .padding(.horizontal, Theme.pagePadding)
+    }
+
+    private func folderDetail(_ folder: LibraryFolder) -> String {
+        let server = servers.first { $0.id == folder.serverID }?.name ?? "?"
+        var parts = [server, "\(folder.fileCount) tệp"]
+        if let last = folder.lastScan { parts.append("quét " + last.formatted(.relative(presentation: .named))) }
+        return parts.joined(separator: " · ")
+    }
+
+    // MARK: Maintenance
+
+    static func remove(_ folder: LibraryFolder, context: ModelContext) {
+        let folderKey = folder.key
+        let files = (try? context.fetch(FetchDescriptor<LibraryFile>(predicate: #Predicate { $0.folderKey == folderKey }))) ?? []
+        files.forEach { context.delete($0) }
+        context.delete(folder)
+        pruneOrphans(context: context)
+        try? context.save()
+    }
+
+    static func remove(_ server: MediaServer, context: ModelContext) {
+        let id = server.id
+        let owned = (try? context.fetch(FetchDescriptor<LibraryFolder>(predicate: #Predicate { $0.serverID == id }))) ?? []
+        for folder in owned {
+            let folderKey = folder.key
+            let files = (try? context.fetch(FetchDescriptor<LibraryFile>(predicate: #Predicate { $0.folderKey == folderKey }))) ?? []
+            files.forEach { context.delete($0) }
+            context.delete(folder)
+        }
+        Keychain.set(nil, account: "server.\(id)")
+        RemoteFileSystemPool.shared.reset(id)
+        context.delete(server)
+        pruneOrphans(context: context)
+        try? context.save()
+    }
+
+    /// Drops movies / shows that no longer have any file.
+    private static func pruneOrphans(context: ModelContext) {
+        try? context.save()
+        let remaining = Set(((try? context.fetch(FetchDescriptor<LibraryFile>())) ?? []).map(\.itemKey))
+        for item in (try? context.fetch(FetchDescriptor<LibraryItem>())) ?? [] where !remaining.contains(item.key) {
+            context.delete(item)
+        }
+    }
+
+    #if os(tvOS)
+    private static let spacing: CGFloat = 40
+    #else
+    private static let spacing: CGFloat = 16
+    #endif
+}

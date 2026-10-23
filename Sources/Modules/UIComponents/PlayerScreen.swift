@@ -26,6 +26,9 @@ struct PlayerScreen: View {
     @State private var upNextTask: Task<Void, Never>?
     @State private var scrubDelta: Double?
     @State private var nowPlaying = NowPlayingController()
+    @State private var panel: PlayerPanel?
+    @State private var isFullScreen = false
+    @State private var lastPointerReset = Date.distantPast
     #if os(tvOS)
     @FocusState private var surfaceFocused: Bool
     #endif
@@ -59,9 +62,12 @@ struct PlayerScreen: View {
                     hasPrevious: index > 0,
                     skipBack: Double(skipBack),
                     skipForward: Double(skipForward),
+                    panel: $panel,
+                    isFullScreen: isFullScreen,
                     onClose: close,
                     onNext: { advance(by: 1) },
                     onPrevious: { advance(by: -1) },
+                    onToggleFullScreen: toggleFullScreen,
                     onInteraction: scheduleHide
                 )
                 .transition(.opacity)
@@ -124,7 +130,10 @@ struct PlayerScreen: View {
             showControls()
         }
         .onExitCommand {
-            if upNextCountdown != nil {
+            if panel != nil {
+                panel = nil
+                scheduleHide()
+            } else if upNextCountdown != nil {
                 cancelUpNext()
             } else if controlsVisible, engine.state == .playing {
                 hideControls()
@@ -134,6 +143,15 @@ struct PlayerScreen: View {
         }
         #else
         .background(keyboardShortcuts)
+        #endif
+        #if os(macOS)
+        // Infuse / QuickTime behaviour: moving the pointer reveals the controls, idling hides them and the cursor.
+        .onContinuousHover { phase in
+            if case .active = phase { pointerMoved() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in isFullScreen = true }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in isFullScreen = false }
+        .onAppear { isFullScreen = Self.window?.styleMask.contains(.fullScreen) ?? false }
         #endif
     }
 
@@ -195,16 +213,56 @@ struct PlayerScreen: View {
             Button("") { advance(by: 1) }.keyboardShortcut("n", modifiers: [])
             Button("") { engine.adjustSubtitleDelay(by: -0.1) }.keyboardShortcut("z", modifiers: [])
             Button("") { engine.adjustSubtitleDelay(by: 0.1) }.keyboardShortcut("x", modifiers: [])
-            Button("") { close() }.keyboardShortcut(.escape, modifiers: [])
+            Button("") { toggleFullScreen() }.keyboardShortcut("f", modifiers: [])
+            Button("") { engine.toggleMute(); showControls() }.keyboardShortcut("m", modifiers: [])
+            Button("") { togglePanel(.info) }.keyboardShortcut("i", modifiers: [])
+            Button("") { togglePanel(.tracks) }.keyboardShortcut("t", modifiers: [])
+            Button("") { escape() }.keyboardShortcut(.escape, modifiers: [])
         }
         .opacity(0)
         .accessibilityHidden(true)
     }
     #endif
 
+    private func escape() {
+        if panel != nil {
+            panel = nil
+            scheduleHide()
+        } else if isFullScreen {
+            toggleFullScreen()
+        } else {
+            close()
+        }
+    }
+
+    private func togglePanel(_ target: PlayerPanel) {
+        panel = panel == target ? nil : target
+        showControls()
+    }
+
+    private func toggleFullScreen() {
+        #if os(macOS)
+        Self.window?.toggleFullScreen(nil)
+        showControls()
+        #endif
+    }
+
+    #if os(macOS)
+    private static var window: NSWindow? { NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first { $0.isVisible } }
+
+    private func pointerMoved() {
+        if !controlsVisible {
+            showControls()
+        } else if Date().timeIntervalSince(lastPointerReset) > 0.5 {
+            lastPointerReset = Date()
+            scheduleHide()
+        }
+    }
+    #endif
+
     private func doubleTap(at fraction: CGFloat) {
         #if os(macOS)
-        NSApp.keyWindow?.toggleFullScreen(nil)
+        toggleFullScreen()
         #else
         if fraction < 0.35 {
             jump(-Double(skipBack))
@@ -364,6 +422,10 @@ struct PlayerScreen: View {
     private func hideControls() {
         hideTask?.cancel()
         controlsVisible = false
+        panel = nil
+        #if os(macOS)
+        NSCursor.setHiddenUntilMouseMoves(true)
+        #endif
         #if os(tvOS)
         // The catcher button is enabled in the same update; focus it on the next runloop turn.
         DispatchQueue.main.async { surfaceFocused = true }
@@ -374,7 +436,7 @@ struct PlayerScreen: View {
         hideTask?.cancel()
         hideTask = Task {
             try? await Task.sleep(for: .seconds(5))
-            guard !Task.isCancelled, engine.state == .playing else { return }
+            guard !Task.isCancelled, engine.state == .playing, panel == nil else { return }
             hideControls()
         }
     }

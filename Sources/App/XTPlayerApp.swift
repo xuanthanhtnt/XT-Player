@@ -20,7 +20,8 @@ struct XTPlayerApp: App {
         .modelContainer(container)
         #if os(macOS)
         .defaultSize(width: 1280, height: 760)
-        .windowToolbarStyle(.unifiedCompact)
+        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Mở tệp video…") {
@@ -35,9 +36,4 @@ struct XTPlayerApp: App {
         }
         #endif
     }
-}
-
-extension Notification.Name {
-    static let xtOpenFileRequested = Notification.Name("xt.openFileRequested")
-    static let xtOpenURLRequested = Notification.Name("xt.openURLRequested")
 }

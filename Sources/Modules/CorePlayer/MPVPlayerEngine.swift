@@ -168,6 +168,11 @@ struct PlayerOptions {
     }
 }
 
+struct AudioDevice: Identifiable, Hashable {
+    let id: String          // mpv device name ("auto", "coreaudio/…", "avfoundation/…")
+    let description: String
+}
+
 struct Chapter: Identifiable, Hashable {
     let id: Int
     let title: String
@@ -185,6 +190,33 @@ enum VideoFit: String, CaseIterable, Identifiable {
         case .fill: return "Lấp đầy (cắt viền)"
         case .stretch: return "Kéo giãn"
         }
+    }
+}
+
+/// Recent mpv warnings/errors, readable from the player's Info panel (and copyable for bug reports).
+final class MPVLogBuffer: @unchecked Sendable {
+    static let shared = MPVLogBuffer()
+    private let lock = NSLock()
+    private var lines: [String] = []
+    private let limit = 300
+
+    func append(_ line: String) {
+        lock.lock()
+        lines.append(line)
+        if lines.count > limit { lines.removeFirst(lines.count - limit) }
+        lock.unlock()
+    }
+
+    func snapshot() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return lines
+    }
+
+    func clear() {
+        lock.lock()
+        lines.removeAll()
+        lock.unlock()
     }
 }
 
@@ -215,6 +247,14 @@ final class MPVPlayerEngine: ObservableObject {
     @Published private(set) var audioDelay: Double = 0
     @Published private(set) var subtitleScale: Double = 1
     @Published private(set) var videoFit: VideoFit = .fit
+    /// mpv audio output actually in use ("coreaudio", "audiounit", "avfoundation"), empty = none.
+    @Published private(set) var audioOutput = ""
+    @Published private(set) var videoBitrate: Double = 0
+    @Published private(set) var audioBitrate: Double = 0
+    @Published private(set) var volume: Double = 100
+    @Published private(set) var isMuted = false
+    @Published private(set) var audioDevices: [AudioDevice] = []
+    @Published private(set) var audioDevice = "auto"
 
     let options: PlayerOptions
 
@@ -364,6 +404,29 @@ final class MPVPlayerEngine: ObservableObject {
 
     func selectChapter(_ index: Int) { setProperty("chapter", "\(index)") }
 
+    /// 0…150 (mpv volume-max); unmutes when raised.
+    func setVolume(_ value: Double) {
+        let clamped = min(150, max(0, value))
+        volume = clamped
+        setProperty("volume", String(format: "%.0f", clamped))
+        if clamped > 0, isMuted { setProperty("mute", "no") }
+    }
+
+    func toggleMute() { setProperty("mute", isMuted ? "no" : "yes") }
+
+    /// Output device ("auto" = system default). mpv reopens the audio output on change.
+    func selectAudioDevice(_ name: String) {
+        audioDevice = name
+        setProperty("audio-device", name)
+    }
+
+    func refreshAudioDevices() {
+        queue.async {
+            guard let mpv = self.handle else { return }
+            self.refreshAudioDevices(mpv)
+        }
+    }
+
     func skipChapter(_ step: Int) {
         queue.async { self.command(["add", "chapter", "\(step)"]) }
     }
@@ -381,9 +444,8 @@ final class MPVPlayerEngine: ObservableObject {
             publish { $0.state = .failed("Không khởi tạo được libmpv") }
             return
         }
-        #if DEBUG
-        mpv_request_log_messages(mpv, "warn")
-        #endif
+        // Info-level log lines (AO/VO selection, warnings, errors) are always kept for the Info panel.
+        mpv_request_log_messages(mpv, "info")
 
         var windowID = wid
         mpv_set_option(mpv, "wid", MPV_FORMAT_INT64, &windowID)
@@ -422,7 +484,6 @@ final class MPVPlayerEngine: ObservableObject {
             ("sub-back-color", options.subtitleBackground ? "#99000000" : "#80000000"),
             ("deinterlace", options.deinterlace),
             // Audio.
-            ("audio-channels", "auto"),
             ("volume-max", "150"),
             // Embedded use: no built-in UI, scripts or key bindings.
             ("input-default-bindings", "no"),
@@ -433,21 +494,27 @@ final class MPVPlayerEngine: ObservableObject {
         ]
         if !options.audioLanguages.isEmpty { settings.append(("alang", options.audioLanguages)) }
         #if os(macOS)
-        settings.append(("ao", "coreaudio"))
-        settings.append(("input-media-keys", "yes"))
+        // Fallback chain (trailing comma = then mpv's own auto-probe) so a failing output never means silence.
+        settings.append(("ao", "coreaudio,avfoundation,"))
+        // The system mixer's layout: stereo speakers get a proper downmix, multichannel devices get more.
+        settings.append(("audio-channels", "auto-safe"))
         if options.audioPassthrough {
             settings.append(("audio-spdif", "ac3,eac3,dts,dts-hd,truehd"))
             settings.append(("audio-exclusive", "yes"))
         }
+        #elseif os(tvOS)
+        settings.append(("ao", "audiounit,avfoundation,"))
+        // HDMI: hand the receiver the full 5.1 / 7.1 layout as multichannel LPCM.
+        settings.append(("audio-channels", "auto"))
         #else
-        settings.append(("ao", "audiounit"))
+        settings.append(("ao", "audiounit,avfoundation,"))
+        settings.append(("audio-channels", "auto-safe"))
         #endif
         for (name, value) in settings {
             let status = mpv_set_option_string(mpv, name, value)
-            #if DEBUG
-            if status < 0 { print("[mpv] option \(name)=\(value): \(String(cString: mpv_error_string(status)))") }
-            #endif
-            _ = status
+            if status < 0 {
+                MPVLogBuffer.shared.append("[xt] option \(name)=\(value): \(String(cString: mpv_error_string(status)))")
+            }
         }
 
         guard mpv_initialize(mpv) >= 0 else {
@@ -476,6 +543,9 @@ final class MPVPlayerEngine: ObservableObject {
             ("video-params/colormatrix", MPV_FORMAT_STRING),
             ("container-fps", MPV_FORMAT_DOUBLE),
             ("hwdec-current", MPV_FORMAT_STRING),
+            ("current-ao", MPV_FORMAT_STRING),
+            ("video-bitrate", MPV_FORMAT_DOUBLE),
+            ("audio-bitrate", MPV_FORMAT_DOUBLE),
             ("audio-params/channel-count", MPV_FORMAT_INT64),
             ("audio-params/samplerate", MPV_FORMAT_INT64),
             ("chapter-list/count", MPV_FORMAT_INT64),
@@ -483,6 +553,8 @@ final class MPVPlayerEngine: ObservableObject {
             ("speed", MPV_FORMAT_DOUBLE),
             ("audio-delay", MPV_FORMAT_DOUBLE),
             ("sub-scale", MPV_FORMAT_DOUBLE),
+            ("volume", MPV_FORMAT_DOUBLE),
+            ("mute", MPV_FORMAT_FLAG),
         ]
         for (name, format) in observed {
             mpv_observe_property(mpv, 0, name, format)
@@ -522,6 +594,8 @@ final class MPVPlayerEngine: ObservableObject {
                 pendingSubtitles = []
                 refreshTracks(mpv)
                 refreshChapters(mpv)
+                refreshAudioDevices(mpv)
+                scheduleAudioCheck()
                 let paused = isPaused
                 publish { $0.state = paused ? .paused : .playing }
             case MPV_EVENT_END_FILE:
@@ -536,13 +610,16 @@ final class MPVPlayerEngine: ObservableObject {
                 }
             case MPV_EVENT_SHUTDOWN:
                 return
-            #if DEBUG
             case MPV_EVENT_LOG_MESSAGE:
                 if let data = event.pointee.data {
                     let msg = data.assumingMemoryBound(to: mpv_event_log_message.self).pointee
-                    print("[mpv/\(String(cString: msg.prefix))] \(String(cString: msg.text))", terminator: "")
+                    let line = "[\(String(cString: msg.level))] \(String(cString: msg.prefix)): \(String(cString: msg.text))"
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    MPVLogBuffer.shared.append(line)
+                    #if DEBUG
+                    print("[mpv] \(line)")
+                    #endif
                 }
-            #endif
             default:
                 break
             }
@@ -609,6 +686,15 @@ final class MPVPlayerEngine: ObservableObject {
         case "hwdec-current":
             let v = string()
             publish { $0.hardwareDecoder = v }
+        case "current-ao":
+            let v = string()
+            publish { $0.audioOutput = v }
+        case "video-bitrate":
+            let v = double()
+            publish { $0.videoBitrate = v }
+        case "audio-bitrate":
+            let v = double()
+            publish { $0.audioBitrate = v }
         case "audio-params/channel-count":
             let v = int()
             publish { $0.audio.outputChannels = v }
@@ -623,6 +709,12 @@ final class MPVPlayerEngine: ObservableObject {
         case "speed":
             let v = double()
             publish { $0.speed = v }
+        case "volume":
+            let v = double()
+            publish { $0.volume = v }
+        case "mute":
+            let v = flag()
+            publish { $0.isMuted = v }
         case "audio-delay":
             let v = double()
             publish { $0.audioDelay = v }
@@ -689,6 +781,40 @@ final class MPVPlayerEngine: ObservableObject {
             if engine.video.dolbyVisionProfile != dvProfile {
                 engine.video.dolbyVisionProfile = dvProfile
             }
+        }
+    }
+
+    /// If the file has audio but no output opened (device busy, unsupported layout…), switch to the
+    /// AVFoundation output and reload instead of playing silently. Runs on `queue`.
+    private var audioRecoveryTried = false
+
+    private func scheduleAudioCheck() {
+        audioRecoveryTried = false
+        queue.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.checkAudioOutput() }
+    }
+
+    private func checkAudioOutput() {
+        guard let mpv = handle, !audioRecoveryTried else { return }
+        let hasAudio = (0..<max(0, getInt(mpv, "track-list/count"))).contains { getString(mpv, "track-list/\($0)/type") == "audio" }
+        let aid = getString(mpv, "aid") ?? "no"
+        guard hasAudio, aid != "no", (getString(mpv, "current-ao") ?? "").isEmpty else { return }
+        audioRecoveryTried = true
+        MPVLogBuffer.shared.append("[xt] no audio output opened — retrying with avfoundation")
+        mpv_set_property_string(mpv, "ao", "avfoundation,coreaudio,audiounit,")
+        command(["ao-reload"])
+    }
+
+    private func refreshAudioDevices(_ mpv: OpaquePointer) {
+        var list: [AudioDevice] = []
+        for i in 0..<max(0, getInt(mpv, "audio-device-list/count")) {
+            guard let name = getString(mpv, "audio-device-list/\(i)/name") else { continue }
+            let description = getString(mpv, "audio-device-list/\(i)/description") ?? name
+            list.append(AudioDevice(id: name, description: name == "auto" ? "Mặc định hệ thống" : description))
+        }
+        let current = getString(mpv, "audio-device") ?? "auto"
+        publish {
+            $0.audioDevices = list
+            $0.audioDevice = current
         }
     }
 

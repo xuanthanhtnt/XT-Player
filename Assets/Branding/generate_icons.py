@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """XT-Player brand generator.
 
-The mark: a twisted green ribbon forming an "X"; each of its four arms is a fan of three paper-like
-layers (light to deep green) with soft inter-layer shadows, on a clean light ground.
+The mark is the designer's artwork (Assets/Branding/xt-mark-source.png), cut out of its background
+by prepare_mark.py into xt-mark.png and placed on each icon's ground.
 Every app icon the Apple targets need is rendered from this one description with headless
 Chromium (Playwright):
 
@@ -13,7 +13,7 @@ Chromium (Playwright):
   Assets/Branding/svg/                              vector masters (mark + iOS icon)
 
 Usage:  python3 Assets/Branding/generate_icons.py
-Requires: numpy, pillow, playwright (+ `playwright install chromium`).
+Requires: numpy, pillow, playwright (+ `playwright install chromium`); run prepare_mark.py first.
 """
 from __future__ import annotations
 
@@ -31,104 +31,63 @@ SVG_OUT = BRANDING / "svg"
 INFO = {"author": "xcode", "version": 1}
 
 # ----------------------------------------------------------------------------
-# The mark: a twisted ribbon "X" whose four arms are fanned, paper-like layers
-# (1024 x 1024 design space)
+# The mark: the designer's artwork (Assets/Branding/xt-mark.png, cut out by prepare_mark.py),
+# embedded as an image so every icon is rendered from the original pixels.
 # ----------------------------------------------------------------------------
 
-MARK = dict(L=176, R=848, T=170, B=854, W=262, pinch=0.12, power=0.6, fractions=(1.0, 0.70, 0.42))
-
-# Layer colours per arm, widest (bottom) to narrowest (top).
-PALETTE = {
-    "a1": ["#1C9C5A", "#3DC377", "#8DEBA9"],   # "\\" top-left (behind)
-    "a2": ["#0A6838", "#14904F", "#3BBE70"],   # "\\" bottom-right (the ribbon's back face)
-    "b1": ["#22A955", "#5BD47A", "#C8F59E"],   # "/" top-right (front)
-    "b2": ["#085C30", "#118342", "#2FAE5E"],   # "/" bottom-left (back face)
-}
+MARK_PNG = BRANDING / "xt-mark.png"
+MARK_WIDTH = 720  # width in the 1024-unit design box at scale 1
 
 
-def _path(points) -> str:
-    return "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y in points) + "Z"
+def _mark_data():
+    import base64
+
+    from PIL import Image
+
+    with Image.open(MARK_PNG) as im:
+        w, h = im.size
+    return "data:image/png;base64," + base64.b64encode(MARK_PNG.read_bytes()).decode(), w / h
 
 
-def _arm(start, end, first_half: bool, fraction: float, anchor_side: int, n: int = 120):
-    """Half of a twisted ribbon (terminal -> pinch), narrowed to `fraction` of its width while the
-    edge `anchor_side` (-1 left, +1 right) stays put, so successive layers fan out from that edge."""
-    W, pinch, power = MARK["W"], MARK["pinch"], MARK["power"]
-    t = np.linspace(0, 0.5, n) if first_half else np.linspace(0.5, 1, n)
-    c = np.outer(1 - t, start) + np.outer(t, end)
-    w = W * (pinch + (1 - pinch) * np.abs(2 * t - 1) ** power)
-    fixed = c[:, 0] + anchor_side * w / 2
-    free = fixed - anchor_side * w * fraction
-    return np.concatenate([np.stack([fixed, c[:, 1]], 1), np.stack([free, c[:, 1]], 1)[::-1]])
-
-
-def _arms():
-    L, R, T, B, W = (MARK[k] for k in ("L", "R", "T", "B", "W"))
-    back = ((L + W / 2, T), (R - W / 2, B))    # "\\"
-    front = ((R - W / 2, T), (L + W / 2, B))   # "/"
-    # drawn back-to-front; layers hug each arm's outer edge
-    return [("a1", back, True, -1), ("a2", back, False, +1), ("b2", front, False, -1), ("b1", front, True, +1)]
-
+_MARK_URI, _MARK_ASPECT = None, 1.0
 
 FILTERS = """
 <filter id="soft" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="3"/></filter>
-<filter id="sheen" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="11"/></filter>
-<filter id="layer" x="-30%" y="-30%" width="160%" height="160%">
-  <feGaussianBlur in="SourceAlpha" stdDeviation="7"/><feOffset dy="6" result="b"/>
-  <feFlood flood-color="#012A14" flood-opacity="0.32"/><feComposite in2="b" operator="in" result="s"/>
-  <feMerge><feMergeNode in="s"/><feMergeNode in="SourceGraphic"/></feMerge>
-</filter>
+<filter id="sheen" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="14"/></filter>
 <filter id="drop" x="-30%" y="-30%" width="160%" height="160%">
   <feGaussianBlur in="SourceAlpha" stdDeviation="18"/><feOffset dy="22" result="b"/>
   <feFlood flood-color="#0A4A26" flood-opacity="0.24"/><feComposite in2="b" operator="in" result="s"/>
   <feMerge><feMergeNode in="s"/><feMergeNode in="SourceGraphic"/></feMerge>
 </filter>
-<linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
-  <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.45"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
-</linearGradient>
+<filter id="mono" color-interpolation-filters="sRGB">
+  <feColorMatrix type="matrix" values="0.30 0.59 0.11 0 0  0.30 0.59 0.11 0 0  0.30 0.59 0.11 0 0  0 0 0 1 0"/>
+  <feComponentTransfer><feFuncR type="gamma" amplitude="1.25" exponent="0.55"/><feFuncG type="gamma" amplitude="1.25" exponent="0.55"/>
+  <feFuncB type="gamma" amplitude="1.25" exponent="0.55"/></feComponentTransfer>
+</filter>
 """
 
 
-def _shine(defs: list[str]) -> str:
-    """Soft top-light on the two upper arms (also used alone as the tvOS gloss layer)."""
-    L, R, T = MARK["L"], MARK["R"], MARK["T"]
-    out = []
-    for key, (s, e), first, side in _arms():
-        if not first:
-            continue
-        top = _arm(s, e, first, MARK["fractions"][-1], side)
-        defs.append(f'<clipPath id="clip-{key}"><path d="{_path(top)}"/></clipPath>')
-        out.append(f'<g clip-path="url(#clip-{key})"><rect x="{L - 20}" y="{T - 10}" width="{R - L + 40}" height="200" fill="url(#shine)"/></g>')
-    return "".join(out)
+def _mark_image(x: float, y: float, w: float, h: float, mono: bool) -> str:
+    global _MARK_URI, _MARK_ASPECT
+    if _MARK_URI is None:
+        _MARK_URI, _MARK_ASPECT = _mark_data()
+    filt = ' filter="url(#mono)"' if mono else ""
+    return f'<image href="{_MARK_URI}" x="{x:.2f}" y="{y:.2f}" width="{w:.2f}" height="{h:.2f}" preserveAspectRatio="xMidYMid meet"{filt}/>'
 
 
-def mark_group(mono: str | None = None, gloss: bool = True) -> tuple[str, str]:
-    defs: list[str] = [FILTERS]
-    body = []
-    for key, (s, e), first, side in _arms():
-        layers = []
-        for i, fraction in enumerate(MARK["fractions"]):
-            poly = _arm(s, e, first, fraction, side)
-            if mono:
-                layers.append(f'<path d="{_path(poly)}" fill="{mono}" fill-opacity="{0.45 + 0.2 * i:.2f}"/>')
-                continue
-            effect = ' filter="url(#layer)"' if i > 0 else ""
-            layers.append(f'<path d="{_path(poly)}" fill="{PALETTE[key][i]}"{effect}/>')
-            if i > 0:  # light catching the paper edge
-                edge = poly[len(poly) // 2:]
-                layers.append('<path d="M' + " L".join(f"{x:.1f},{y:.1f}" for x, y in edge) +
-                              '" fill="none" stroke="#F4FFEC" stroke-opacity="0.45" stroke-width="1.6"/>')
-        body.append(f'<g>{"".join(layers)}</g>')
-    if gloss and not mono:
-        body.append(_shine(defs))
-    return "".join(defs), f'<g>{"".join(body)}</g>'
+def mark_box(scale: float, cx: float, cy: float) -> tuple[float, float, float, float]:
+    global _MARK_URI, _MARK_ASPECT
+    if _MARK_URI is None:
+        _MARK_URI, _MARK_ASPECT = _mark_data()
+    w = MARK_WIDTH * scale
+    h = w / _MARK_ASPECT
+    return cx - w / 2, cy - h / 2, w, h
 
 
 def placed_mark(scale, cx, cy, mono=None, gloss=True, shadow=True):
-    d, g = mark_group(mono, gloss)
-    tx, ty = cx - 512 * scale, cy - 512 * scale
+    x, y, w, h = mark_box(scale, cx, cy)
     filt = ' filter="url(#drop)"' if shadow else ""
-    return d, f'<g transform="translate({tx:.2f},{ty:.2f}) scale({scale:.4f})"><g{filt}>{g}</g></g>'
+    return FILTERS, f'<g{filt}>{_mark_image(x, y, w, h, bool(mono))}</g>'
 
 
 def background(w, h, tint=True) -> tuple[str, str]:
@@ -184,16 +143,14 @@ def mac_icon() -> str:
 
 
 def tv_layers(w, h) -> dict[str, str]:
-    """Back = light ground, Middle = the ribbon X, Front = its top-light (moves separately in parallax)."""
+    """Back = light ground, Middle = the mark, Front = a soft light sweep (moves separately in parallax)."""
     bd, bb = background(w, h)
-    scale = h / 1024 * 1.12
-    cy = h / 2 + h * 0.015
-    d, m = placed_mark(scale, w / 2, cy, gloss=False)
-    tx, ty = w / 2 - 512 * scale, cy - 512 * scale
-    shine_defs: list[str] = [FILTERS]
-    shine = _shine(shine_defs)
-    front = f'<g transform="translate({tx:.2f},{ty:.2f}) scale({scale:.4f})">{shine}</g>'
-    return {"Back": svg(w, h, bd, bb), "Middle": svg(w, h, d, m), "Front": svg(w, h, "".join(shine_defs), front)}
+    scale = h / 1024 * 1.10
+    d, m = placed_mark(scale, w / 2, h / 2 + h * 0.01)
+    x, y, mw, mh = mark_box(scale, w / 2, h / 2 + h * 0.01)
+    front = (f'<ellipse cx="{x + mw * 0.42:.1f}" cy="{y + mh * 0.40:.1f}" rx="{mw * 0.30:.1f}" ry="{mh * 0.07:.1f}" '
+             f'transform="rotate(-24 {x + mw * 0.42:.1f} {y + mh * 0.40:.1f})" fill="#FFFFFF" fill-opacity="0.32" filter="url(#sheen)"/>')
+    return {"Back": svg(w, h, bd, bb), "Middle": svg(w, h, d, m), "Front": svg(w, h, FILTERS, front)}
 
 
 WORD_FONT = "Inter Display, Inter, SF Pro Display, Helvetica Neue, sans-serif"
@@ -213,19 +170,19 @@ def top_shelf(w, h) -> str:
 def dmg_background(w, h, scale) -> str:
     bd, bb = background(w, h, tint=False)
     s = scale
-    d, m = placed_mark(0.11 * s, 54 * s, 46 * s, shadow=False)
+    d, m = placed_mark(0.10 * s, 48 * s, 46 * s, shadow=False)
     arrow = (f'<path d="M{262 * s},{190 * s} C{300 * s},{172 * s} {360 * s},{172 * s} {398 * s},{190 * s}" fill="none" '
              f'stroke="#34C759" stroke-width="{5 * s}" stroke-linecap="round"/>'
              f'<path d="M{388 * s},{176 * s} L{404 * s},{193 * s} L{382 * s},{200 * s}" fill="none" stroke="#34C759" '
              f'stroke-width="{5 * s}" stroke-linecap="round" stroke-linejoin="round"/>')
-    text = (f'<text x="{90 * s}" y="{54 * s}" font-family="{WORD_FONT}" font-weight="800" font-size="{26 * s}" fill="#0F2A18">XT-Player</text>'
+    text = (f'<text x="{94 * s}" y="{54 * s}" font-family="{WORD_FONT}" font-weight="800" font-size="{26 * s}" fill="#0F2A18">XT-Player</text>'
             f'<text x="{w / 2}" y="{352 * s}" text-anchor="middle" font-family="Inter, sans-serif" font-weight="500" '
             f'font-size="{15 * s}" fill="#4B5B50">Kéo XT-Player vào Applications để cài đặt</text>')
     return svg(w, h, bd + d, bb + m + arrow + text)
 
 
 def brand_mark() -> str:
-    d, m = placed_mark(1.0, 512, 512, shadow=False)
+    d, m = placed_mark(1.38, 512, 512, shadow=False)
     return svg(1024, 1024, d, m)
 
 

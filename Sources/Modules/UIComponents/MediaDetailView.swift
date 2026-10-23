@@ -98,11 +98,28 @@ struct MediaDetailView: View {
                 Text("Không tìm thấy mục này trong thư viện.").padding(Theme.pagePadding)
             }
         }
-        .background(AppBackground())
+        .background { backdrop }
         .ignoresSafeArea(edges: .top)
+        #if os(iOS)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        #endif
         .onAppear {
             if season == nil { season = defaultSeason }
         }
+    }
+
+    /// Infuse-style page: the backdrop, heavily blurred, tints the whole detail page.
+    private var backdrop: some View {
+        ZStack {
+            AppBackground()
+            if let item = matches.first, let path = item.backdropPath ?? item.posterPath {
+                ArtworkImage(path: path, size: "w780")
+                    .blur(radius: 70)
+                    .opacity(0.5)
+                    .overlay(Theme.background.opacity(0.35))
+            }
+        }
+        .ignoresSafeArea()
     }
 
     // MARK: Data
@@ -138,8 +155,8 @@ struct MediaDetailView: View {
             ArtworkImage(path: item.backdropPath ?? item.posterPath, size: "w1280")
                 .frame(height: Self.heroHeight)
                 .frame(maxWidth: .infinity)
-                .overlay(
-                    LinearGradient(colors: [.clear, Theme.background.opacity(0.6), Theme.background],
+                .mask(
+                    LinearGradient(colors: [.black, .black, .black.opacity(0.4), .clear],
                                    startPoint: .top, endPoint: .bottom)
                 )
             HStack(alignment: .bottom, spacing: 24) {
@@ -182,14 +199,17 @@ struct MediaDetailView: View {
                 }
                 #if !os(tvOS)
                 .buttonStyle(.borderedProminent)
-                .tint(Theme.accent)
+                .tint(.white)
+                .foregroundStyle(.black)
+                .controlSize(.large)
                 #endif
                 if resume != nil {
                     Button { start(item, at: target, fromBeginning: true) } label: {
-                        Label("Từ đầu", systemImage: "backward.end.fill")
+                        Label("Từ đầu", systemImage: "backward.end.fill").font(.headline)
                     }
                     #if !os(tvOS)
                     .buttonStyle(.bordered)
+                    .controlSize(.large)
                     #endif
                 }
             }
@@ -345,9 +365,9 @@ struct MediaDetailView: View {
     private static let titleSize: CGFloat = 58
     private static let castSize: CGFloat = 130
     #else
-    private static let heroHeight: CGFloat = 420
-    private static let posterWidth: CGFloat = 130
-    private static let titleSize: CGFloat = 32
+    private static let heroHeight: CGFloat = 480
+    private static let posterWidth: CGFloat = 150
+    private static let titleSize: CGFloat = 36
     private static let castSize: CGFloat = 76
     #endif
 }
