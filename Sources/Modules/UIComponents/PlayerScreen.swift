@@ -56,8 +56,12 @@ struct PlayerScreen: View {
             inputLayer
 
             #if os(macOS)
-            if controlsVisible, !isFullScreen {
-                titleBand.transition(.opacity)
+            if controlsVisible {
+                // Fades out (rather than vanishing) once the window is in full screen.
+                titleBand
+                    .opacity(isFullScreen ? 0 : 1)
+                    .animation(.easeInOut(duration: 0.3), value: isFullScreen)
+                    .transition(.opacity)
             }
             #endif
 
@@ -74,7 +78,7 @@ struct PlayerScreen: View {
                     panel: $panel,
                     isFullScreen: isFullScreen,
                     isMini: isMini,
-                    topInset: isFullScreen ? 0 : titlebarHeight,
+                    topInset: titlebarHeight,
                     onClose: close,
                     onNext: { advance(by: 1) },
                     onPrevious: { advance(by: -1) },

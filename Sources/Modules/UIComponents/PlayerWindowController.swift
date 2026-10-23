@@ -4,14 +4,15 @@ import SwiftUI
 
 /// Infuse-style window behaviour while a video plays on the Mac:
 /// - the window takes the video's shape (and keeps it while resizing), so a windowed video has no bars;
-/// - the traffic lights fade out together with the player controls;
+/// - the traffic lights stay available and fade out together with the player controls;
 /// - the PiP button turns the window into a small always-on-top player in the corner of the screen.
 /// Everything is put back when the player closes.
 @MainActor
 final class PlayerWindowController: NSObject, ObservableObject {
     @Published private(set) var isFullScreen = false
     @Published private(set) var isMini = false
-    /// Height of the transparent title bar that lies over the top of the video (0 in full screen).
+    /// Height of the transparent title bar that lies over the top of the video in a window. Measured
+    /// in windowed mode only and kept in full screen, so the controls do not jump when the mode changes.
     @Published private(set) var titlebarHeight: CGFloat = 28
 
     private weak var window: NSWindow?
@@ -29,6 +30,10 @@ final class PlayerWindowController: NSObject, ObservableObject {
         frameBeforePlayback = fullScreen ? nil : window.frame
         isFullScreen = fullScreen
         refreshTitlebarHeight()
+        showWindowButtons()
+        // Hiding the window toolbar for playback (RootView) also hides the close / minimise / zoom
+        // buttons; they are put back once that update has been applied.
+        DispatchQueue.main.async { [weak self] in self?.showWindowButtons() }
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(willEnterFullScreen(_:)), name: NSWindow.willEnterFullScreenNotification, object: window)
         center.addObserver(self, selector: #selector(didEnterFullScreen(_:)), name: NSWindow.didEnterFullScreenNotification, object: window)
@@ -155,12 +160,29 @@ final class PlayerWindowController: NSObject, ObservableObject {
             applyAspect(resize: false)
             enterMini()
         } else {
-            applyAspect(resize: true)
+            // macOS has just put the window back where it was, already in the video's shape. Only a
+            // file with another shape (played while in full screen) needs a second, visible resize.
+            applyAspect(resize: !windowMatchesAspect)
         }
+    }
+
+    private var windowMatchesAspect: Bool {
+        guard let window, aspect > 0 else { return true }
+        let content = window.contentRect(forFrameRect: window.frame)
+        return abs(content.width / aspect - content.height) < 3
     }
 
     @objc private func didResize(_ notification: Notification) {
         refreshTitlebarHeight()
+        showWindowButtons()
+    }
+
+    /// The traffic lights stay available while a video plays (they only fade with the controls).
+    private func showWindowButtons() {
+        guard let window else { return }
+        for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            if let button = window.standardWindowButton(type), button.isHidden { button.isHidden = false }
+        }
     }
 
     // MARK: Title bar
@@ -168,6 +190,7 @@ final class PlayerWindowController: NSObject, ObservableObject {
     /// Fades the close / minimise / zoom buttons with the player controls (windowed only).
     func setTitlebarButtonsVisible(_ visible: Bool, animated: Bool = true) {
         refreshTitlebarHeight()
+        if visible { showWindowButtons() }
         guard let window, let buttons = window.standardWindowButton(.closeButton)?.superview else { return }
         if !visible, window.styleMask.contains(.fullScreen) { return }
         let alpha: CGFloat = visible ? 1 : 0
@@ -183,10 +206,8 @@ final class PlayerWindowController: NSObject, ObservableObject {
     }
 
     private func refreshTitlebarHeight() {
-        guard let window else { return }
-        let height = window.styleMask.contains(.fullScreen)
-            ? 0
-            : min(60, max(22, window.frame.height - window.contentLayoutRect.height))
+        guard let window, !window.styleMask.contains(.fullScreen), !isFullScreen else { return }
+        let height = min(60, max(22, window.frame.height - window.contentLayoutRect.height))
         if abs(height - titlebarHeight) > 0.5 { titlebarHeight = height }
     }
 }
