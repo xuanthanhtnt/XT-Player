@@ -175,14 +175,17 @@ jobs:
           MPVTYPE=$( [ -n "$MPVBIN" ] && file -b "$MPVBIN" | cut -c1-60 || echo "-")
           echo "otool -L:"; echo "$LINKED" | head -n 40
           echo "Libmpv binary: $MPVBIN ($MPVTYPE)"
-          if grep -qi "Libmpv" <<<"$LINKED"; then
+          MPVID=$( [ -n "$MPVBIN" ] && xcrun otool -D "$MPVBIN" | tail -n 1 || echo "-")
+          # mpv_render_context_create only exists inside libmpv itself (the app never references it).
+          if grep -qi "libmpv" <<<"$LINKED"; then
             LIBMPV="dynamic"
-          elif grep -aq "target-colorspace-hint" "$BIN"; then
+          elif xcrun nm -a "$BIN" 2>/dev/null | grep -q "mpv_render_context_create"; then
             LIBMPV="static"
           else
             LIBMPV="MISSING"
           fi
-          echo "::notice title=${{ matrix.platform }} libmpv::linkage=$LIBMPV · embedded Libmpv: $MPVTYPE · $(grep -c "framework" <<<"$LINKED") frameworks linked"
+          DEPS=$(echo "$LINKED" | tail -n +2 | awk '{print $1}' | sed -E 's#.*/##' | tr '\n' ' ')
+          echo "::notice title=${{ matrix.platform }} libmpv::linkage=$LIBMPV · Libmpv id: $MPVID · type: $MPVTYPE · binary links: $DEPS"
           ICON_KEYS=$(plutil -convert json -o - "$PLIST" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(",".join(sorted(k for k in d if "Icon" in k or "TopShelf" in k)))')
           FWS=$( [ -d "$FW" ] && ls "$FW" | tr '\n' ' ' || echo none)
           MSG="$(plist CFBundleIdentifier) v$(plist CFBundleShortVersionString) ($(plist CFBundleVersion)) · min OS $MINOS · $(lipo -archs "$BIN") · $(du -sh "$APP" | cut -f1) · icon '$ICON_NAME' [$ICON_KEYS] ($ICONS renditions) · libmpv $LIBMPV · frameworks: $FWS"
