@@ -16,7 +16,8 @@ struct HomeView: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        NavigationStack(path: $path) {
+        let index = LibraryIndex(files: files, entries: entries)
+        return NavigationStack(path: $path) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 34) {
                     header
@@ -24,12 +25,12 @@ struct HomeView: View {
                     if !continueWatching.isEmpty { continueRow }
                     if !movies.isEmpty {
                         ShelfRow(title: "Phim", seeAll: .grid(kind: LibraryKind.movie.rawValue)) {
-                            ForEach(movies.prefix(24)) { posterLink($0) }
+                            ForEach(movies.prefix(24)) { posterLink($0, index: index) }
                         }
                     }
                     if !shows.isEmpty {
                         ShelfRow(title: "TV Shows", seeAll: .grid(kind: LibraryKind.show.rawValue)) {
-                            ForEach(shows.prefix(24)) { posterLink($0) }
+                            ForEach(shows.prefix(24)) { posterLink($0, index: index) }
                         }
                     }
                     sources
@@ -77,25 +78,10 @@ struct HomeView: View {
     private var movies: [LibraryItem] { items.filter { $0.kind == .movie } }
     private var shows: [LibraryItem] { items.filter { $0.kind == .show } }
 
-    private var entriesByKey: [String: MediaEntry] {
-        Dictionary(entries.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
-    }
-
     private var continueWatching: [MediaEntry] {
         Array(entries.filter { $0.resumePosition != nil }.prefix(16))
     }
 
-    private func itemProgress(_ item: LibraryItem) -> (progress: Double?, watched: Bool) {
-        let byKey = entriesByKey
-        let mine = files.filter { $0.itemKey == item.key }.compactMap { byKey[$0.key] }
-        if item.kind == .movie {
-            let best = mine.max { ($0.progress ?? 0) < ($1.progress ?? 0) }
-            return (best?.resumePosition != nil ? best?.progress : nil, best?.isWatched ?? false)
-        }
-        let total = files.filter { $0.itemKey == item.key }.count
-        let watched = mine.filter(\.isWatched).count
-        return (nil, total > 0 && watched == total)
-    }
 
     // MARK: Sections
 
@@ -165,8 +151,8 @@ struct HomeView: View {
         }
     }
 
-    private func posterLink(_ item: LibraryItem) -> some View {
-        let state = itemProgress(item)
+    private func posterLink(_ item: LibraryItem, index: LibraryIndex) -> some View {
+        let state = index.progress(of: item)
         return NavigationLink(value: Route.detail(itemKey: item.key)) {
             PosterCard(item: item, progress: state.progress, watched: state.watched)
         }
@@ -180,7 +166,7 @@ struct HomeView: View {
                 ForEach(servers) { server in
                     NavigationLink(value: Route.browser(serverID: server.id, path: "", title: server.name)) {
                         SourceCard(icon: server.kind.icon, title: server.name,
-                                   subtitle: "\(server.kind == .smb ? "SMB" : "WebDAV") · \(server.credentials.displayHost)")
+                                   subtitle: "\(server.kind == .smb ? "SMB" : "WebDAV") · \(server.displayHost)")
                     }
                     .tileButtonStyle()
                 }
@@ -325,5 +311,27 @@ struct SourceCard: View {
         .glassPanel()
         .contentShape(Rectangle())
         #endif
+    }
+}
+
+/// Per-render lookup tables so shelves don't scan every file for every poster.
+struct LibraryIndex {
+    private let filesByItem: [String: [LibraryFile]]
+    private let entriesByKey: [String: MediaEntry]
+
+    init(files: [LibraryFile], entries: [MediaEntry]) {
+        filesByItem = Dictionary(grouping: files, by: \.itemKey)
+        entriesByKey = Dictionary(entries.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+    }
+
+    func progress(of item: LibraryItem) -> (progress: Double?, watched: Bool) {
+        let files = filesByItem[item.key] ?? []
+        let mine = files.compactMap { entriesByKey[$0.key] }
+        if item.kind == .movie {
+            let best = mine.max { ($0.progress ?? 0) < ($1.progress ?? 0) }
+            return (best?.resumePosition != nil ? best?.progress : nil, best?.isWatched ?? false)
+        }
+        let watched = mine.filter(\.isWatched).count
+        return (nil, !files.isEmpty && watched == files.count)
     }
 }

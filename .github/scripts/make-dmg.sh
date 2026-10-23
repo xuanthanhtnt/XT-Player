@@ -12,6 +12,7 @@ trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/stage" "$(dirname "$OUT")"
 cp -R "$APP" "$WORK/stage/XT-Player.app"
 rm -f "$OUT"
+METHOD="hdiutil"
 
 # Retina-aware background: @1x + @2x combined into one multi-resolution TIFF.
 BG="$WORK/background.tiff"
@@ -25,7 +26,7 @@ if command -v create-dmg >/dev/null 2>&1 || brew install create-dmg >/dev/null 2
   [ -f "$VOLICON" ] && ARGS+=(--volicon "$VOLICON")
   # Finder lays the window out through AppleScript; on a headless runner that can fail, so fall back.
   if create-dmg "${ARGS[@]}" "$OUT" "$WORK/stage" || create-dmg --skip-jenkins "${ARGS[@]}" "$OUT" "$WORK/stage"; then
-    echo "DMG created with create-dmg"
+    METHOD="create-dmg"
   fi
 fi
 
@@ -36,4 +37,4 @@ if [ ! -f "$OUT" ]; then
 fi
 
 hdiutil verify "$OUT"
-echo "::notice title=macOS DMG::$(basename "$OUT") · $(du -h "$OUT" | cut -f1)"
+echo "::notice title=macOS DMG::$(basename "$OUT") · $(du -h "$OUT" | cut -f1) · built with $METHOD"

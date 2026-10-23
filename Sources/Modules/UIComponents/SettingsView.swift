@@ -94,7 +94,7 @@ struct SettingsView: View {
                     HStack {
                         Label(server.name, systemImage: server.kind.icon)
                         Spacer()
-                        Text(server.credentials.displayHost).foregroundStyle(.secondary).font(.footnote)
+                        Text(server.displayHost).foregroundStyle(.secondary).font(.footnote)
                         Button(role: .destructive) { remove(server) } label: { Image(systemName: "trash") }
                             #if !os(tvOS)
                             .buttonStyle(.borderless)

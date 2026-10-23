@@ -56,6 +56,9 @@ final class MediaServer {
 
     var kind: ServerKind { ServerKind(rawValue: kindRaw) ?? .smb }
 
+    var displayHost: String { port > 0 ? "\(host):\(port)" : host }
+
+    /// Reads the password from the Keychain — call once per operation, not per row render.
     var credentials: ServerCredentials {
         ServerCredentials(
             id: id, kind: kind, host: host, port: port, username: username,

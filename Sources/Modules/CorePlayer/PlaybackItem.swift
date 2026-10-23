@@ -60,8 +60,11 @@ enum PlaybackFactory {
 
     /// Library files of one item (a movie's versions, or a show's episodes in order).
     static func library(_ files: [LibraryFile], item: LibraryItem, context: ModelContext) -> [PlaybackItem] {
-        files.compactMap { file in
-            guard let serverID = file.serverID, let server = server(id: serverID, context: context),
+        var servers: [String: ServerCredentials] = [:]
+        return files.compactMap { file in
+            guard let serverID = file.serverID else { return nil }
+            if servers[serverID] == nil { servers[serverID] = server(id: serverID, context: context) }
+            guard let server = servers[serverID],
                   let url = RemoteFileSystems.playbackURL(server: server, path: file.path) else { return nil }
             let title: String
             let subtitle: String?

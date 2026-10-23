@@ -15,18 +15,38 @@
 
 ---
 
-## Trạng thái: v0.1 — Proof of Concept
+## Trạng thái: v0.2 — Thư viện & ổ mạng kiểu Infuse
 
-| Hạng mục | Có trong v0.1 |
+| Hạng mục | Có trong v0.2 |
 |---|---|
-| Lõi phát | libmpv 0.41 + FFmpeg 9.0.2, `vo=gpu-next` (Vulkan → MoltenVK → Metal), `hwdec=videotoolbox` |
-| HDR | HDR10 / HLG passthrough (`target-colorspace-hint`), Dolby Vision P5/P8 qua libplacebo + libdovi, tự tone-map → SDR khi màn hình không hỗ trợ |
-| Apple TV | Match Content: tự đổi tần số quét & dải động qua `AVDisplayManager` (khi bật trong Cài đặt tvOS) |
-| Âm thanh | TrueHD, DTS-HD MA, DTS:X, E-AC3/Atmos, FLAC 24/192 → PCM đa kênh 5.1/7.1; macOS có bitstream qua HDMI; Night Mode (dynaudnorm) |
-| Phụ đề | libass (.ass/.ssa giữ nguyên hiệu ứng), .srt, .vtt, PGS; chọn track; lệch phụ đề ±0.1 s realtime |
-| Nguồn | Tệp cục bộ (iOS/iPadOS/macOS), URL HTTP/HTTPS/FTP/RTSP từ NAS (mọi nền tảng); bộ đệm RAM 400 MB (iOS/tvOS) / 1 GB (macOS) |
-| Thư viện | SwiftData: danh sách xem gần đây + điểm xem dở (resume) |
-| Metadata | Regex parser tên file (tên, năm, SxxEyy, 4K, DV/HDR10/HDR10+, TrueHD Atmos/DTS-HD…) có unit test |
+| Lõi phát | libmpv 0.41 + FFmpeg 9.0.2, `vo=gpu-next` (Vulkan → MoltenVK → Metal), `hwdec=videotoolbox`, deinterlace tự động |
+| HDR | HDR10 / HLG passthrough, Dolby Vision P5/P8 qua libplacebo + libdovi, tone-map → SDR khi màn hình không hỗ trợ |
+| Apple TV | Match Content: tự đổi tần số quét & dải động (`AVDisplayManager`) |
+| Âm thanh | TrueHD, DTS-HD MA, DTS:X, E-AC3/Atmos, FLAC 24/192 → PCM 7.1; macOS bitstream qua HDMI; Night Mode; chỉnh lệch tiếng ±50 ms |
+| Phụ đề | libass (.ass giữ hiệu ứng), .srt/.vtt/PGS; **tự nạp phụ đề cạnh file trên NAS**; lệch ±0,1 s; cỡ/vị trí/nền chữ |
+| Ổ mạng | **SMB2/3** (SMBClient thuần Swift, stream thẳng vào mpv qua `xtsmb://`, không transcode), **WebDAV** (HTTP/HTTPS, Basic/Digest, chứng chỉ tự ký), **tự tìm NAS bằng Bonjour**; mật khẩu trong Keychain |
+| Thư viện | Quét thư mục NAS, nhận diện phim / tập, **poster, backdrop, diễn viên, tóm tắt, tên & ảnh từng tập từ TMDb**; hàng *Tiếp tục xem*, kệ Phim / TV Shows, trang chi tiết, chọn mùa, đánh dấu đã xem |
+| Player | Hàng đợi + **Up Next** tự chuyển tập, chapter, tốc độ 0.5–2×, Fit / Fill / Stretch, Now Playing & Control Center, chạm đúp hai bên để tua, vuốt ngang để tua (iPhone/iPad), phím tắt (Mac/iPad) |
+| macOS | Bản cài **.dmg** kéo-thả vào Applications |
+
+### So với Infuse
+
+Ngang hoặc hơn: định dạng và codec (FFmpeg đầy đủ), phụ đề ASS (libass), SMB/WebDAV trực tiếp, thư viện TMDb, Up Next, mã nguồn mở và tự build trên GitHub.
+
+Còn thiếu so với Infuse (lộ trình):
+
+- **Dolby Vision ở chế độ DV thật của TV và Atmos qua Dolby MAT trên Apple TV.** Cần engine AVPlayer chạy song song với libmpv, và phải test trên thiết bị.
+- Đồng bộ Trakt và iCloud.
+- Tải phụ đề từ OpenSubtitles.
+- Ảnh xem trước khi tua (scrub thumbnails).
+- Top Shelf "Tiếp tục xem" trên tvOS.
+- Kết nối Plex / Jellyfin / Emby.
+
+### TMDb
+
+Lấy khoá miễn phí tại themoviedb.org ▸ Settings ▸ API, rồi nhập vào **Cài đặt ▸ Thư viện**. App nhận cả *API key (v3)* lẫn *Read Access Token (v4)*.
+
+Bạn cũng có thể đặt secret `TMDB_API_KEY` trong GitHub để CI nhúng sẵn khoá vào bản build. Khi đó khoá nằm trong file `.ipa`/`.dmg` công khai, nên chỉ làm vậy với khoá cá nhân.
 
 ## Tải bản build
 
@@ -35,7 +55,7 @@ Mọi bản build chạy trên **GitHub Actions** (runner macOS 26) — không c
 - **Mỗi lần push**: vào tab **Actions → Build → (run mới nhất) → Artifacts**:
   - `XTPlayer-…-iOS` → `…-unsigned.ipa` (iPhone/iPad)
   - `XTPlayer-…-tvOS` → `…-unsigned.ipa` (Apple TV)
-  - `XTPlayer-…-macOS` → `.zip` chứa `XTPlayer.app` (ký ad-hoc)
+  - `XTPlayer-…-macOS` → `.dmg` (kéo XT-Player vào Applications; ký ad-hoc)
 - **Phát hành**: tạo tag `v0.1.0` (`git tag v0.1.0 && git push origin v0.1.0`) → workflow tự tạo **Release** đính kèm cả 3 tệp.
 - Artifact của mỗi run được giữ 30 ngày; Release thì giữ vĩnh viễn. Mỗi run còn tự kiểm tra gói (bundle ID, OS tối thiểu, kiến trúc, icon đã biên dịch, libmpv đã liên kết) và ghi kết quả ở phần *Annotations* của run.
 
@@ -43,7 +63,7 @@ Mọi bản build chạy trên **GitHub Actions** (runner macOS 26) — không c
 
 - **iOS / iPadOS (sideload)**: file `.ipa` chưa ký — ký lại bằng Apple ID của bạn với [Sideloadly](https://sideloadly.io), AltStore hoặc SideStore.
 - **tvOS (sideload)**: dùng công cụ ký/cài có hỗ trợ Apple TV (ví dụ [atvloadly](https://hub.docker.com/r/bitxeno/atvloadly) chạy trên NAS), hoặc Xcode ▸ Devices nếu có Mac. Ổn định nhất vẫn là TestFlight (xem dưới).
-- **macOS**: giải nén, kéo `XTPlayer.app` vào Applications, lần đầu chuột phải ▸ **Open** (hoặc `xattr -dr com.apple.quarantine /Applications/XTPlayer.app`).
+- **macOS**: mở `.dmg`, kéo **XT-Player** vào Applications. Lần đầu chuột phải ▸ **Open** (hoặc chạy `xattr -dr com.apple.quarantine /Applications/XT-Player.app`), vì bản build chỉ ký ad-hoc, không notarize.
 
 ### TestFlight (tuỳ chọn)
 
@@ -64,22 +84,25 @@ Biến (Variables) tuỳ chọn: `BUNDLE_ID` (mặc định `com.xuanthanhtnt.xt
 XT-Player/
 ├── .github/workflows/build.yml     # CI/CD: test → build iOS/tvOS/macOS → release / TestFlight
 ├── .github/scripts/xcodebuild.sh   # chạy xcodebuild, gom log, đổi lỗi biên dịch thành annotation
+├── .github/scripts/make-dmg.sh     # đóng gói DMG cho macOS
 ├── project.yml                     # XcodeGen (CI tự sinh XTPlayer.xcodeproj)
+├── Config/Info.plist               # Bonjour, ATS, khoá TMDb build-time
 ├── Assets/
 │   ├── AppIcon.xcassets/           # Icon iOS (sáng/tối/tinted) + macOS
 │   ├── AppIcon-tvOS.xcassets/      # Icon parallax 3 lớp (Back · X · Glossy) + Top Shelf
 │   ├── Shared.xcassets/            # BrandMark, AccentColor
-│   └── Branding/                   # generate_icons.py + SVG gốc
+│   └── Branding/                   # generate_icons.py, SVG gốc, nền DMG
 ├── Sources/
 │   ├── App/                        # @main, entitlements macOS
 │   ├── Modules/
-│   │   ├── CorePlayer/             # MPVPlayerEngine (libmpv), Metal layer, Match Content, audio session
-│   │   ├── NetworkStorage/         # MediaSource (file / URL); SMB/WebDAV/NFS ở v0.2
-│   │   ├── MetadataScraper/        # FilenameParser (TMDb ở v0.3)
-│   │   └── UIComponents/           # Home, Player, controls (touch / bàn phím / Siri Remote)
+│   │   ├── CorePlayer/             # MPVPlayerEngine, xtsmb:// stream bridge, hàng đợi, Now Playing, Match Content
+│   │   ├── NetworkStorage/         # SMB2/3, WebDAV, Bonjour, MediaSource
+│   │   ├── MetadataScraper/        # FilenameParser, TMDb client, LibraryScanner
+│   │   └── UIComponents/           # Home, thư viện, chi tiết, duyệt NAS, Cài đặt, Player
 │   └── Services/
-│       ├── LocalDatabase/          # SwiftData MediaEntry + resume point
-│       └── TraktSync/              # v0.5
+│       ├── LocalDatabase/          # SwiftData: MediaEntry, MediaServer, LibraryItem/File/Folder
+│       ├── Settings/               # AppSettings, Keychain
+│       └── TraktSync/              # (sau)
 └── Tests/XTPlayerTests/            # Unit test (chạy trên CI)
 ```
 
@@ -100,14 +123,15 @@ Khi chạy debug bằng Xcode, tắt *Metal API Validation* (Edit Scheme ▸ Run
 - **tvOS/iOS không cho phép bitstream** TrueHD/DTS ra HDMI với bất kỳ app nào: libmpv giải mã sang PCM đa kênh (lossless, đủ 7.1) — receiver hiển thị "Multi-channel PCM". Riêng đối tượng Atmos/DTS:X sẽ chỉ còn lớp nền 7.1. macOS thì bitstream được (tuỳ chọn `audioPassthrough`).
 - **Dolby Vision** được render bởi libplacebo (đọc RPU, tone-map chính xác) và xuất ra dưới dạng HDR10/PQ — TV không bật chế độ "Dolby Vision" như với AVPlayer.
 - Nếu cần DV "thật" + Atmos qua Dolby MAT trên Apple TV, có thể cân nhắc thêm backend [AetherEngine](https://github.com/superuser404notfound/AetherEngine) (FFmpeg demux + VideoToolbox + AVPlayer, LGPL) song song với libmpv ở giai đoạn sau.
-- MPVKit bản LGPL không có giao thức `smb://`. Đổi product sang `MPVKit-GPL` trong `project.yml` để mpv phát SMB trực tiếp (chịu giấy phép GPL).
+- SMB đi qua cầu `xtsmb://` của app (SMBClient, MIT), nên vẫn giữ được MPVKit bản LGPL. NFS chưa hỗ trợ.
+- Trên tvOS, thư viện được lưu trong thư mục Caches (giới hạn của tvOS). Nếu hệ thống dọn bộ nhớ thì quét lại; điểm xem dở sẽ được giữ bền vững khi có đồng bộ Trakt hoặc iCloud.
 
 ## Lộ trình
 
-- [x] **v0.1** — Khung SwiftUI đa nền tảng, logo Đỏ Cam Glossy, libmpv phát 4K HDR10/DV & TrueHD/DTS, CI build cả 3 nền tảng
-- [ ] **v0.2** — SMB3 & WebDAV, duyệt NAS
-- [ ] **v0.3** — TMDb API v3, Poster Grid
-- [ ] **v0.4** — Tối ưu Focus tvOS, OpenSubtitles API
-- [ ] **v0.5** — Trakt.tv sync
-- [ ] **v1.0** — Bản ổn định tvOS / iOS / macOS
-- [ ] **v2.0** — Android TV & Tablet (Jetpack Compose + libmpv-android)
+- [x] **v0.1**: Khung SwiftUI đa nền tảng, libmpv phát 4K HDR10/DV và TrueHD/DTS, CI build cả 3 nền tảng
+- [x] **v0.2**: Logo lá xanh, macOS DMG, SMB3 và WebDAV, Bonjour, thư viện TMDb, Up Next, chapter, Now Playing, Cài đặt
+- [ ] **v0.3**: Engine AVPlayer cho Dolby Vision và Atmos (Apple TV), song song với libmpv
+- [ ] **v0.4**: OpenSubtitles, scrub thumbnails, Top Shelf
+- [ ] **v0.5**: Trakt.tv sync, iCloud
+- [ ] **v1.0**: Bản ổn định tvOS / iOS / macOS
+- [ ] **v2.0**: Android TV và Tablet (Jetpack Compose + libmpv-android)
