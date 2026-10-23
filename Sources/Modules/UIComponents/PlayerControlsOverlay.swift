@@ -33,7 +33,8 @@ struct PlayerControlsOverlay: View {
     @Binding var panel: PlayerPanel?
     var isFullScreen = false
     var isMini = false
-    /// macOS: height of the title band above the controls (0 in full screen).
+    /// macOS: height of the title band above the controls. It stays the same in full screen, so nothing
+    /// in the layout moves when macOS switches modes.
     var topInset: CGFloat = 0
     let onClose: () -> Void
     var onNext: () -> Void = {}
@@ -66,8 +67,10 @@ struct PlayerControlsOverlay: View {
     #if os(macOS)
     private var macBody: some View {
         GeometryReader { geo in
+            // Only the window size decides the layout (never the full-screen flag, which flips when
+            // macOS finishes its animation): the controls stay put while the window zooms.
             let compact = geo.size.width < 560
-            let barBottom: CGFloat = isFullScreen ? 50 : (isMini || compact ? 10 : 28)
+            let barBottom: CGFloat = compact ? 10 : 28
             ZStack(alignment: .top) {
                 VStack(spacing: 0) {
                     HStack(spacing: 8) {

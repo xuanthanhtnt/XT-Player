@@ -11,7 +11,8 @@ import SwiftUI
 final class PlayerWindowController: NSObject, ObservableObject {
     @Published private(set) var isFullScreen = false
     @Published private(set) var isMini = false
-    /// Height of the transparent title bar that lies over the top of the video (0 in full screen).
+    /// Height of the transparent title bar that lies over the top of the video in a window. Measured
+    /// in windowed mode only and kept in full screen, so the controls do not jump when the mode changes.
     @Published private(set) var titlebarHeight: CGFloat = 28
 
     private weak var window: NSWindow?
@@ -155,8 +156,16 @@ final class PlayerWindowController: NSObject, ObservableObject {
             applyAspect(resize: false)
             enterMini()
         } else {
-            applyAspect(resize: true)
+            // macOS has just put the window back where it was, already in the video's shape. Only a
+            // file with another shape (played while in full screen) needs a second, visible resize.
+            applyAspect(resize: !windowMatchesAspect)
         }
+    }
+
+    private var windowMatchesAspect: Bool {
+        guard let window, aspect > 0 else { return true }
+        let content = window.contentRect(forFrameRect: window.frame)
+        return abs(content.width / aspect - content.height) < 3
     }
 
     @objc private func didResize(_ notification: Notification) {
@@ -183,10 +192,8 @@ final class PlayerWindowController: NSObject, ObservableObject {
     }
 
     private func refreshTitlebarHeight() {
-        guard let window else { return }
-        let height = window.styleMask.contains(.fullScreen)
-            ? 0
-            : min(60, max(22, window.frame.height - window.contentLayoutRect.height))
+        guard let window, !window.styleMask.contains(.fullScreen), !isFullScreen else { return }
+        let height = min(60, max(22, window.frame.height - window.contentLayoutRect.height))
         if abs(height - titlebarHeight) > 0.5 { titlebarHeight = height }
     }
 }
