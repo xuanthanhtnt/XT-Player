@@ -184,7 +184,7 @@ jobs:
           else
             LIBMPV="MISSING"
           fi
-          DEPS=$(echo "$LINKED" | tail -n +2 | awk '{print $1}' | grep -v "^/System\|^/usr/lib" | tr '\n' ' ')
+          DEPS=$(echo "$LINKED" | tail -n +2 | awk '{print $1}' | { grep -v "^/System\|^/usr/lib" || true; } | tr '\n' ' ')
           echo "::notice title=${{ matrix.platform }} libmpv::linkage=$LIBMPV · Libmpv id: $MPVID · type: $MPVTYPE · binary links: $DEPS"
           ICON_KEYS=$(plutil -convert json -o - "$PLIST" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(",".join(sorted(k for k in d if "Icon" in k or "TopShelf" in k)))')
           FWS=$( [ -d "$FW" ] && ls "$FW" | tr '\n' ' ' || echo none)
