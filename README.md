@@ -27,8 +27,8 @@
 | Ổ mạng | **SMB2/3** (SMBClient thuần Swift, stream thẳng vào mpv qua `xtsmb://`, không transcode), **WebDAV** (HTTP/HTTPS, Basic/Digest, chứng chỉ tự ký), **tự tìm NAS bằng Bonjour**; mật khẩu trong Keychain |
 | Thư viện | Quét thư mục NAS, nhận diện phim / tập, **poster, backdrop, diễn viên, tóm tắt, tên & ảnh từng tập từ TMDb**; hàng *Tiếp tục xem*, kệ Phim / TV Shows, trang chi tiết, chọn mùa, đánh dấu đã xem |
 | Giao diện | Thanh bên (Mac / iPad / Apple TV) hoặc tab (iPhone): Trang chủ · Phim · TV Shows · Nguồn · Cài đặt; **banner nổi bật** tự xoay vòng, kệ *Tiếp tục xem* / *Mới thêm*; trang chi tiết nền backdrop mờ |
-| Player | Thanh điều khiển nổi (kính mờ), thanh tua có bong bóng thời gian + tên chương, **bảng Âm thanh & Phụ đề**, **bảng Thông tin** (codec, HDR, bitrate, đầu ra âm thanh, nhật ký libmpv), hàng đợi + **Up Next**, tốc độ 0.5–2×, Fit / Fill / Stretch, Now Playing, chạm đúp / vuốt để tua |
-| macOS | Bản cài **.dmg**; nút & phím **F toàn màn hình**, video co giãn theo cửa sổ, âm lượng + chọn thiết bị phát, rê chuột hiện điều khiển / tự ẩn con trỏ; phím tắt Space ← → ↑ ↓ N M I T Z X Esc |
+| Player | Thanh điều khiển nổi (kính mờ), thanh tua có bong bóng thời gian + tên chương, **bảng ⚙︎ có tab** Âm thanh · Phụ đề · Video · Chương · Thông tin (codec, HDR, bitrate, đầu ra âm thanh, nhật ký libmpv), hàng đợi + **Up Next**, tốc độ 0.5–2×, Fit / Fill / Stretch, Now Playing, chạm đúp / vuốt để tua |
+| macOS | Bản cài **.dmg**; trình phát kiểu Infuse (nút *Đóng*, thanh nổi: âm lượng · ⏮ ↺ ▶ ↻ ⏭ · ⚙︎ · cửa sổ nổi · toàn màn hình); **cửa sổ lấy đúng tỉ lệ video — không viền đen**, dải tiêu đề mờ; **cửa sổ nổi** (nhỏ, luôn ở trên); âm lượng + chọn thiết bị phát, rê chuột hiện điều khiển / tự ẩn con trỏ; phím tắt Space ← → ↑ ↓ N M A I T Z X F Esc |
 
 ### So với Infuse
 
