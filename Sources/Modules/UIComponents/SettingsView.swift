@@ -120,7 +120,7 @@ struct SettingsView: View {
         #if os(macOS)
         .formStyle(.grouped)
         #endif
-        .navigationTitle("Cài đặt")
+        .pageTitle("Cài đặt")
         .onAppear {
             tmdbKey = Keychain.get(account: "tmdb") ?? ""
         }

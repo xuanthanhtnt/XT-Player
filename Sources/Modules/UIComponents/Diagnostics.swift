@@ -109,8 +109,8 @@ struct DiagnosticsLogView: View {
             }
             .padding(Theme.pagePadding)
         }
+        .pageTitle("Nhật ký trình phát")
         .background(AppBackground())
-        .navigationTitle("Nhật ký trình phát")
         .onAppear(perform: refresh)
     }
 

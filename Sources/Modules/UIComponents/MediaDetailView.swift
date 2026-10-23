@@ -36,8 +36,8 @@ struct LibraryGridView: View {
             }
             .padding(Theme.pagePadding)
         }
+        .pageTitle(kind == .movie ? "Phim" : "TV Shows")
         .background(AppBackground())
-        .navigationTitle(kind == .movie ? "Phim" : "TV Shows")
     }
 
     private var items: [LibraryItem] {

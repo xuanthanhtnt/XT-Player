@@ -74,7 +74,7 @@ struct BrowserView: View {
                 }
             }
         }
-        .navigationTitle(title)
+        .pageTitle(title)
         .task { await load(reconnect: false) }
     }
 
@@ -219,7 +219,10 @@ struct AddServerView: View {
                 }
             }
         }
-        .navigationTitle("Thêm máy chủ")
+        #if os(macOS)
+        .formStyle(.grouped)
+        #endif
+        .pageTitle("Thêm máy chủ")
         .onAppear { discovery.start() }
         .onDisappear { discovery.stop() }
     }
@@ -353,8 +356,8 @@ struct SourcesView: View {
             }
             .padding(.vertical, Theme.pagePadding / 2)
         }
+        .pageTitle("Nguồn")
         .background(AppBackground())
-        .navigationTitle("Nguồn")
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

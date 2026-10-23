@@ -90,3 +90,25 @@ enum TimeFormat {
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
     }
 }
+
+extension View {
+    /// The Mac window uses a hidden title bar (video and artwork reach the top edge), so page titles are
+    /// drawn in the content as large Infuse-style headings there; elsewhere it is a normal navigation title.
+    @ViewBuilder
+    func pageTitle(_ title: String) -> some View {
+        #if os(macOS)
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title)
+                .font(.largeTitle.weight(.bold))
+                .lineLimit(1)
+                .padding(.horizontal, Theme.pagePadding)
+                .padding(.top, 10)
+                .padding(.bottom, 4)
+            self
+        }
+        .navigationTitle(title)
+        #else
+        navigationTitle(title)
+        #endif
+    }
+}
