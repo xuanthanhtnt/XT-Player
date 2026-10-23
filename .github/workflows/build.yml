@@ -165,9 +165,11 @@ jobs:
           MINOS=$(plist MinimumOSVersion); [ "$MINOS" = "-" ] && MINOS=$(plist LSMinimumSystemVersion)
           ICON_NAME=$(plist CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName); [ "$ICON_NAME" = "-" ] && ICON_NAME=$(plist CFBundleIconName)
           ICONS=$(xcrun assetutil --info "$RES/Assets.car" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sum(1 for r in d if "Icon" in str(r.get("Name","")) or "Shelf" in str(r.get("Name",""))))')
-          LIBMPV=$( (nm -gU "$BIN" 2>/dev/null | grep -q " _mpv_create$" && echo static) || (otool -L "$BIN" | grep -qi mpv && echo dynamic) || echo MISSING)
+          LINKED=$(xcrun otool -L "$BIN")
+          if grep -qi "Libmpv.framework" <<<"$LINKED" && [ -e "$FW/Libmpv.framework" ]; then LIBMPV="embedded"; else LIBMPV="MISSING"; fi
+          ICON_KEYS=$(plutil -convert json -o - "$PLIST" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(",".join(sorted(k for k in d if "Icon" in k or "TopShelf" in k)))')
           FWS=$( [ -d "$FW" ] && ls "$FW" | tr '\n' ' ' || echo none)
-          MSG="$(plist CFBundleIdentifier) v$(plist CFBundleShortVersionString) ($(plist CFBundleVersion)) · min OS $MINOS · $(lipo -archs "$BIN") · $(du -sh "$APP" | cut -f1) · icon '$ICON_NAME' ($ICONS renditions) · libmpv $LIBMPV · frameworks: $FWS"
+          MSG="$(plist CFBundleIdentifier) v$(plist CFBundleShortVersionString) ($(plist CFBundleVersion)) · min OS $MINOS · $(lipo -archs "$BIN") · $(du -sh "$APP" | cut -f1) · icon '$ICON_NAME' [$ICON_KEYS] ($ICONS renditions) · libmpv $LIBMPV · frameworks: $FWS"
           echo "$MSG"
           echo "::notice title=${{ matrix.platform }} bundle::$MSG"
           [ "$LIBMPV" != "MISSING" ] || { echo "::error::libmpv is not linked into the binary"; exit 1; }
