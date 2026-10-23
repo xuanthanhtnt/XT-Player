@@ -172,19 +172,19 @@ jobs:
             codesign -d --entitlements :- "$APP" 2>/dev/null | grep -c "<key>" | xargs -I{} echo "entitlements: {} keys"
           fi
           MPVBIN=$(find "$FW/Libmpv.framework" -maxdepth 3 -type f -name Libmpv | head -n 1)
-          MPVTYPE=$( [ -n "$MPVBIN" ] && file -b "$MPVBIN" | cut -c1-60 || echo "-")
+          MPVTYPE=$( [ -n "$MPVBIN" ] && file -b "$MPVBIN" | tr '\n' ' ' | cut -c1-160 || echo "-")
           echo "otool -L:"; echo "$LINKED" | head -n 40
           echo "Libmpv binary: $MPVBIN ($MPVTYPE)"
           MPVID=$( [ -n "$MPVBIN" ] && xcrun otool -D "$MPVBIN" | tail -n 1 || echo "-")
           # mpv_render_context_create only exists inside libmpv itself (the app never references it).
           if grep -qi "libmpv" <<<"$LINKED"; then
             LIBMPV="dynamic"
-          elif xcrun nm -a "$BIN" 2>/dev/null | grep -q "mpv_render_context_create"; then
+          elif grep -aq "audio-pitch-correction" "$BIN"; then   # an mpv option name the app never uses
             LIBMPV="static"
           else
             LIBMPV="MISSING"
           fi
-          DEPS=$(echo "$LINKED" | tail -n +2 | awk '{print $1}' | sed -E 's#.*/##' | tr '\n' ' ')
+          DEPS=$(echo "$LINKED" | tail -n +2 | awk '{print $1}' | grep -v "^/System\|^/usr/lib" | tr '\n' ' ')
           echo "::notice title=${{ matrix.platform }} libmpv::linkage=$LIBMPV · Libmpv id: $MPVID · type: $MPVTYPE · binary links: $DEPS"
           ICON_KEYS=$(plutil -convert json -o - "$PLIST" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(",".join(sorted(k for k in d if "Icon" in k or "TopShelf" in k)))')
           FWS=$( [ -d "$FW" ] && ls "$FW" | tr '\n' ' ' || echo none)
