@@ -1,0 +1,151 @@
+# XT-Player — XcodeGen spec.
+# The .xcodeproj is generated (CI runs `xcodegen generate`); it is not committed.
+name: XTPlayer
+
+options:
+  bundleIdPrefix: com.xuanthanhtnt
+  deploymentTarget:
+    iOS: "18.0"
+    tvOS: "18.0"
+    macOS: "15.0"
+  createIntermediateGroups: true
+  developmentLanguage: vi
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    PRODUCT_NAME: XTPlayer
+    PRODUCT_MODULE_NAME: XTPlayer
+    PRODUCT_BUNDLE_IDENTIFIER: com.xuanthanhtnt.xtplayer
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    GENERATE_INFOPLIST_FILE: YES
+    INFOPLIST_KEY_CFBundleDisplayName: XT-Player
+    INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.entertainment
+    INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+    INFOPLIST_KEY_NSLocalNetworkUsageDescription: XT-Player kết nối tới NAS / máy chủ media trong mạng nội bộ để phát video.
+    ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEAD_CODE_STRIPPING: YES
+    ENABLE_PREVIEWS: YES
+    SWIFT_EMIT_LOC_STRINGS: NO
+  configs:
+    Debug:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+    Release:
+      SWIFT_COMPILATION_MODE: wholemodule
+
+packages:
+  MPVKit:
+    # libmpv 0.41 + FFmpeg 9.0.2 prebuilt for iOS / tvOS / macOS (MoltenVK, libplacebo, libass, libdovi).
+    # Switch the product below to "MPVKit-GPL" to get native smb:// playback inside mpv (GPL licence).
+    url: https://github.com/mpvkit/MPVKit
+    exactVersion: 1.1.0-n9.0.2
+
+targets:
+  XTPlayer-iOS:
+    platform: iOS
+    type: application
+    sources:
+      - path: Sources
+        excludes:
+          - "**/*.md"
+      - path: Assets/Shared.xcassets
+      - path: Assets/AppIcon.xcassets
+    dependencies:
+      - package: MPVKit
+        product: MPVKit
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIUserInterfaceStyle: Dark
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
+        INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+
+  XTPlayer-tvOS:
+    platform: tvOS
+    type: application
+    sources:
+      - path: Sources
+        excludes:
+          - "**/*.md"
+      - path: Assets/Shared.xcassets
+      - path: Assets/AppIcon-tvOS.xcassets
+    dependencies:
+      - package: MPVKit
+        product: MPVKit
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: "3"
+        ASSETCATALOG_COMPILER_APPICON_NAME: "App Icon & Top Shelf Image"
+        INFOPLIST_KEY_UIUserInterfaceStyle: Dark
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+
+  XTPlayer-macOS:
+    platform: macOS
+    type: application
+    sources:
+      - path: Sources
+        excludes:
+          - "**/*.md"
+      - path: Assets/Shared.xcassets
+      - path: Assets/AppIcon.xcassets
+    dependencies:
+      - package: MPVKit
+        product: MPVKit
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: Sources/App/XTPlayer-macOS.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+        INFOPLIST_KEY_NSHumanReadableCopyright: "© 2026 XT-Player"
+
+  XTPlayerTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/XTPlayerTests
+      - path: Sources/Modules/MetadataScraper/FilenameParser.swift
+    settings:
+      base:
+        PRODUCT_NAME: XTPlayerTests
+        PRODUCT_MODULE_NAME: XTPlayerTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.xuanthanhtnt.xtplayer.tests
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+
+schemes:
+  XTPlayer-iOS:
+    build:
+      targets:
+        XTPlayer-iOS: all
+    archive:
+      config: Release
+  XTPlayer-tvOS:
+    build:
+      targets:
+        XTPlayer-tvOS: all
+    archive:
+      config: Release
+  XTPlayer-macOS:
+    build:
+      targets:
+        XTPlayer-macOS: all
+    archive:
+      config: Release
+  XTPlayerTests:
+    build:
+      targets:
+        XTPlayerTests: [test]
+    test:
+      config: Debug
+      targets:
+        - XTPlayerTests
