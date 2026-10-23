@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Infuse-style window behaviour while a video plays on the Mac:
 /// - the window takes the video's shape (and keeps it while resizing), so a windowed video has no bars;
-/// - the traffic lights fade out together with the player controls;
+/// - the traffic lights stay available and fade out together with the player controls;
 /// - the PiP button turns the window into a small always-on-top player in the corner of the screen.
 /// Everything is put back when the player closes.
 @MainActor
@@ -30,6 +30,10 @@ final class PlayerWindowController: NSObject, ObservableObject {
         frameBeforePlayback = fullScreen ? nil : window.frame
         isFullScreen = fullScreen
         refreshTitlebarHeight()
+        showWindowButtons()
+        // Hiding the window toolbar for playback (RootView) also hides the close / minimise / zoom
+        // buttons; they are put back once that update has been applied.
+        DispatchQueue.main.async { [weak self] in self?.showWindowButtons() }
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(willEnterFullScreen(_:)), name: NSWindow.willEnterFullScreenNotification, object: window)
         center.addObserver(self, selector: #selector(didEnterFullScreen(_:)), name: NSWindow.didEnterFullScreenNotification, object: window)
@@ -170,6 +174,15 @@ final class PlayerWindowController: NSObject, ObservableObject {
 
     @objc private func didResize(_ notification: Notification) {
         refreshTitlebarHeight()
+        showWindowButtons()
+    }
+
+    /// The traffic lights stay available while a video plays (they only fade with the controls).
+    private func showWindowButtons() {
+        guard let window else { return }
+        for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            if let button = window.standardWindowButton(type), button.isHidden { button.isHidden = false }
+        }
     }
 
     // MARK: Title bar
@@ -177,6 +190,7 @@ final class PlayerWindowController: NSObject, ObservableObject {
     /// Fades the close / minimise / zoom buttons with the player controls (windowed only).
     func setTitlebarButtonsVisible(_ visible: Bool, animated: Bool = true) {
         refreshTitlebarHeight()
+        if visible { showWindowButtons() }
         guard let window, let buttons = window.standardWindowButton(.closeButton)?.superview else { return }
         if !visible, window.styleMask.contains(.fullScreen) { return }
         let alpha: CGFloat = visible ? 1 : 0
