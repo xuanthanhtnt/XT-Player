@@ -86,6 +86,20 @@ struct PosterCard: View {
     }
 }
 
+/// Poster that opens the detail page, with progress / watched state.
+struct PosterLink: View {
+    let item: LibraryItem
+    let index: LibraryIndex
+
+    var body: some View {
+        let state = index.progress(of: item)
+        NavigationLink(value: Route.detail(itemKey: item.key)) {
+            PosterCard(item: item, progress: state.progress, watched: state.watched)
+        }
+        .tileButtonStyle()
+    }
+}
+
 /// 16:9 card for Continue Watching and episodes.
 struct LandscapeCard: View {
     let title: String

@@ -1,11 +1,45 @@
 import SwiftData
 import SwiftUI
 
+/// What a library grid shows (sidebar entries on the Mac, "Xem tất cả" from the home shelves).
+enum LibraryFilter: String, Hashable, CaseIterable {
+    case movies, shows, recent, unwatched, topRated
+
+    var title: String {
+        switch self {
+        case .movies: return "Phim"
+        case .shows: return "TV Shows"
+        case .recent: return "Mới thêm"
+        case .unwatched: return "Chưa xem"
+        case .topRated: return "Điểm cao"
+        }
+    }
+
+    var emptyText: String {
+        switch self {
+        case .unwatched: return "Bạn đã xem hết mọi thứ trong thư viện."
+        case .topRated: return "Chưa có mục nào có điểm TMDb."
+        default: return "Thư viện trống — thêm thư mục từ mục Nguồn."
+        }
+    }
+}
+
 struct LibraryGridView: View {
-    let kind: LibraryKind
+    let filter: LibraryFilter
 
     @Query(sort: \LibraryItem.title) private var allItems: [LibraryItem]
-    @State private var sort: Sort = .recent
+    @Query private var files: [LibraryFile]
+    @Query private var entries: [MediaEntry]
+    @State private var sort: Sort
+
+    init(kind: LibraryKind) {
+        self.init(filter: kind == .movie ? .movies : .shows)
+    }
+
+    init(filter: LibraryFilter) {
+        self.filter = filter
+        _sort = State(initialValue: filter == .topRated ? .rating : .recent)
+    }
 
     enum Sort: String, CaseIterable, Identifiable {
         case recent = "Mới thêm"
@@ -16,45 +50,149 @@ struct LibraryGridView: View {
     }
 
     var body: some View {
-        ScrollView {
+        let index = LibraryIndex(files: files, entries: entries)
+        let shown = items(index)
+        return ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Picker("Sắp xếp", selection: $sort) {
-                    ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
+                if filter != .recent {
+                    Picker("Sắp xếp", selection: $sort) {
+                        ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 520)
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 520)
+
+                if shown.isEmpty {
+                    Text(filter.emptyText)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 20)
+                }
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: Theme.posterWidth, maximum: Theme.posterWidth * 1.25), spacing: Self.spacing)],
                           alignment: .leading, spacing: Self.spacing) {
-                    ForEach(items) { item in
-                        NavigationLink(value: Route.detail(itemKey: item.key)) {
-                            PosterCard(item: item)
-                        }
-                        .tileButtonStyle()
+                    ForEach(shown) { item in
+                        PosterLink(item: item, index: index)
                     }
                 }
             }
             .padding(Theme.pagePadding)
         }
-        .pageTitle(kind == .movie ? "Phim" : "TV Shows")
+        .pageTitle(filter.title)
         .background(AppBackground())
     }
 
-    private var items: [LibraryItem] {
-        let filtered = allItems.filter { $0.kind == kind }
+    private func items(_ index: LibraryIndex) -> [LibraryItem] {
+        var list: [LibraryItem]
+        switch filter {
+        case .movies: list = allItems.filter { $0.kind == .movie }
+        case .shows: list = allItems.filter { $0.kind == .show }
+        case .recent: return Array(allItems.sorted { $0.addedAt > $1.addedAt }.prefix(60))
+        case .unwatched: list = allItems.filter { !index.progress(of: $0).watched }
+        case .topRated: list = allItems.filter { ($0.rating ?? 0) > 0 }
+        }
         switch sort {
-        case .recent: return filtered.sorted { $0.addedAt > $1.addedAt }
-        case .title: return filtered
-        case .year: return filtered.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
-        case .rating: return filtered.sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
+        case .recent: return list.sorted { $0.addedAt > $1.addedAt }
+        case .title: return list
+        case .year: return list.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
+        case .rating: return list.sorted { ($0.rating ?? 0) > ($1.rating ?? 0) }
         }
     }
 
     #if os(tvOS)
-    private static let spacing: CGFloat = 48
+    static let spacing: CGFloat = 48
     #else
-    private static let spacing: CGFloat = 18
+    static let spacing: CGFloat = 18
     #endif
+}
+
+/// One shelf per genre (Infuse's "Movie Genres").
+struct GenresView: View {
+    @Query(sort: \LibraryItem.title) private var items: [LibraryItem]
+    @Query private var files: [LibraryFile]
+    @Query private var entries: [MediaEntry]
+
+    var body: some View {
+        let index = LibraryIndex(files: files, entries: entries)
+        let byGenre = Dictionary(grouping: items.flatMap { item in item.genres.map { ($0, item) } }, by: { $0.0 })
+        let genres = byGenre.keys.sorted { (byGenre[$0]?.count ?? 0, $1) > (byGenre[$1]?.count ?? 0, $0) }
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 30) {
+                if genres.isEmpty {
+                    Text("Chưa có thể loại — thêm khoá TMDb trong Cài đặt rồi quét lại thư viện.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, Theme.pagePadding)
+                }
+                ForEach(genres, id: \.self) { genre in
+                    ShelfRow(title: genre) {
+                        ForEach(byGenre[genre]?.map { $0.1 } ?? []) { PosterLink(item: $0, index: index) }
+                    }
+                }
+            }
+            .padding(.vertical, Theme.pagePadding / 2)
+        }
+        .pageTitle("Thể loại")
+        .background(AppBackground())
+    }
+}
+
+/// Searches titles, original titles, genres and cast of the library.
+struct LibrarySearchView: View {
+    @Query(sort: \LibraryItem.title) private var items: [LibraryItem]
+    @Query private var files: [LibraryFile]
+    @Query private var entries: [MediaEntry]
+    @State private var query = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let index = LibraryIndex(files: files, entries: entries)
+        let results = matches
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Tên phim, TV show, thể loại, diễn viên…", text: $query)
+                        .textFieldStyle(.plain)
+                        .focused($focused)
+                    if !query.isEmpty {
+                        Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                        #if !os(tvOS)
+                        .buttonStyle(.plain)
+                        #endif
+                    }
+                }
+                .font(.title3)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .glassPanel(cornerRadius: 12)
+                .frame(maxWidth: 620)
+
+                if !query.isEmpty, results.isEmpty {
+                    Text("Không tìm thấy \"\(query)\" trong thư viện.").font(.callout).foregroundStyle(.secondary)
+                }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: Theme.posterWidth, maximum: Theme.posterWidth * 1.25), spacing: LibraryGridView.spacing)],
+                          alignment: .leading, spacing: LibraryGridView.spacing) {
+                    ForEach(results) { PosterLink(item: $0, index: index) }
+                }
+            }
+            .padding(Theme.pagePadding)
+        }
+        .pageTitle("Tìm kiếm")
+        .background(AppBackground())
+        .onAppear { focused = true }
+    }
+
+    private var matches: [LibraryItem] {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return [] }
+        return items.filter { item in
+            item.title.localizedStandardContains(text)
+                || (item.originalTitle?.localizedStandardContains(text) ?? false)
+                || item.genres.contains { $0.localizedStandardContains(text) }
+                || item.castMembers.contains { $0.name.localizedStandardContains(text) }
+        }
+    }
 }
 
 struct MediaDetailView: View {
@@ -150,91 +288,110 @@ struct MediaDetailView: View {
 
     // MARK: Sections
 
+    /// Infuse's detail hero: a tall backdrop fading into the page, the title, a white Resume / Play
+    /// button, a row of square action buttons with the facts beside them, then the progress line.
     private func hero(_ item: LibraryItem) -> some View {
-        ZStack(alignment: .bottomLeading) {
-            ArtworkImage(path: item.backdropPath ?? item.posterPath, size: "w1280")
-                .frame(height: Self.heroHeight)
-                .frame(maxWidth: .infinity)
-                .mask(
-                    LinearGradient(colors: [.black, .black, .black.opacity(0.4), .clear],
-                                   startPoint: .top, endPoint: .bottom)
-                )
-            HStack(alignment: .bottom, spacing: 24) {
-                ArtworkImage(path: item.posterPath, size: "w342", placeholderIcon: item.kind == .show ? "tv" : "film")
-                    .frame(width: Self.posterWidth, height: Self.posterWidth * 1.5)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .shadow(color: .black.opacity(0.5), radius: 20, y: 10)
-                VStack(alignment: .leading, spacing: 10) {
+        let target = item.kind == .show ? nextUp : files.first
+        let entry = target.flatMap { entryByKey[$0.key] }
+        return VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .bottomLeading) {
+                ArtworkImage(path: item.backdropPath ?? item.posterPath, size: "w1280", placeholderIcon: item.kind == .show ? "tv" : "film")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .mask(
+                        LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.5),
+                                               .init(color: .black.opacity(0.35), location: 0.8), .init(color: .clear, location: 1)],
+                                       startPoint: .top, endPoint: .bottom)
+                    )
+                    .overlay(
+                        LinearGradient(colors: [Theme.background.opacity(0.55), .clear], startPoint: .bottomLeading, endPoint: .center)
+                    )
+
+                VStack(alignment: .leading, spacing: 14) {
                     Text(item.title)
-                        .font(.system(size: Self.titleSize, weight: .heavy))
+                        .font(.system(size: Self.titleSize, weight: .bold))
                         .lineLimit(2)
-                    Text(metaLine(item))
-                        .font(.callout)
-                        .foregroundStyle(.white.opacity(0.75))
-                    if !item.genres.isEmpty {
-                        Text(item.genres.prefix(4).joined(separator: " · "))
-                            .font(.footnote)
-                            .foregroundStyle(.white.opacity(0.6))
+                        .shadow(color: .black.opacity(0.45), radius: 10)
+                    if let target {
+                        playButton(item, target: target, resume: entry?.resumePosition)
                     }
-                    if let badges = files.first?.badges, !badges.isEmpty {
-                        HStack(spacing: 6) {
-                            ForEach(badges, id: \.self) { TagChip(text: $0, highlighted: $0 == "DV" || $0.hasPrefix("HDR")) }
-                        }
+                    HStack(spacing: 7) {
+                        actionButtons(item, target: target, resumable: entry?.resumePosition != nil)
+                        Text(metaLine(item))
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .lineLimit(1)
+                            .padding(.leading, 12)
                     }
-                    actions(item)
                 }
+                .padding(.horizontal, Theme.pagePadding)
+                .padding(.bottom, 18)
             }
-            .padding(.horizontal, Theme.pagePadding)
-            .padding(.bottom, 8)
+            .containerRelativeFrame(.vertical) { length, _ in min(Self.heroMax, max(Self.heroMin, length * 0.7)) }
+
+            if let entry, let resume = entry.resumePosition, entry.duration > 0 {
+                ResumeLine(position: resume, duration: entry.duration)
+                    .padding(.horizontal, Theme.pagePadding)
+                    .padding(.top, 4)
+            }
         }
     }
 
-    private func actions(_ item: LibraryItem) -> some View {
-        HStack(spacing: 14) {
-            if let target = item.kind == .show ? nextUp : files.first {
-                let resume = entryByKey[target.key]?.resumePosition
-                Button { start(item, at: target, fromBeginning: false) } label: {
-                    Label(playLabel(item, target: target, resume: resume), systemImage: "play.fill")
-                        .font(.headline)
-                }
-                #if !os(tvOS)
-                .buttonStyle(.borderedProminent)
-                .tint(.white)
-                .foregroundStyle(.black)
-                .controlSize(.large)
-                #endif
-                if resume != nil {
-                    Button { start(item, at: target, fromBeginning: true) } label: {
-                        Label("Từ đầu", systemImage: "backward.end.fill").font(.headline)
-                    }
-                    #if !os(tvOS)
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                    #endif
-                }
+    private func playButton(_ item: LibraryItem, target: LibraryFile, resume: Double?) -> some View {
+        let code = item.kind == .show ? target.episodeCode : nil
+        return Button { start(item, at: target, fromBeginning: false) } label: {
+            #if os(tvOS)
+            Label(playLabel(item, target: target, resume: resume), systemImage: "play.fill").font(.headline)
+            #else
+            HStack(spacing: 6) {
+                Text(resume == nil ? "Phát" : "Tiếp tục").fontWeight(.bold)
+                if let code { Text(code).fontWeight(.semibold) }
+                if let resume { Text(TimeFormat.fullClock(resume)).monospacedDigit() }
             }
-            Menu {
-                let allWatched = !files.isEmpty && files.allSatisfy { entryByKey[$0.key]?.isWatched ?? false }
-                Button {
-                    for file in files {
-                        MediaLibrary.setWatched(!allWatched, key: file.key, title: item.title, in: context)
-                    }
-                } label: {
-                    Label(allWatched ? "Đánh dấu chưa xem" : "Đánh dấu đã xem", systemImage: allWatched ? "circle" : "checkmark.circle")
-                }
-                Button {
-                    Task { await scanner.refresh(item, context: context) }
-                } label: {
-                    Label("Làm mới thông tin TMDb", systemImage: "arrow.clockwise")
-                }
-            } label: {
-                Image(systemName: "ellipsis.circle").font(.title2)
-            }
-            #if !os(tvOS)
-            .buttonStyle(.plain)
+            .font(.system(size: 15))
+            .foregroundStyle(.black)
+            .padding(.horizontal, 24)
+            .frame(minWidth: 218, minHeight: 38)
+            .background(Color.white, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             #endif
         }
-        .padding(.top, 6)
+        #if !os(tvOS)
+        .buttonStyle(.plain)
+        .keyboardShortcut(.defaultAction)
+        #endif
+    }
+
+    @ViewBuilder
+    private func actionButtons(_ item: LibraryItem, target: LibraryFile?, resumable: Bool) -> some View {
+        let allWatched = !files.isEmpty && files.allSatisfy { entryByKey[$0.key]?.isWatched ?? false }
+        squareButton(allWatched ? "eye.slash" : "eye", help: allWatched ? "Đánh dấu chưa xem" : "Đánh dấu đã xem") {
+            for file in files {
+                MediaLibrary.setWatched(!allWatched, key: file.key, title: item.title, in: context)
+            }
+        }
+        if resumable, let target {
+            squareButton("arrow.counterclockwise", help: "Xem từ đầu") { start(item, at: target, fromBeginning: true) }
+        }
+        squareButton("arrow.triangle.2.circlepath", help: "Làm mới thông tin TMDb") {
+            Task { await scanner.refresh(item, context: context) }
+        }
+    }
+
+    private func squareButton(_ icon: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: Self.squareIcon, weight: .semibold))
+                #if !os(tvOS)
+                .foregroundStyle(.white)
+                .frame(width: 38, height: 38)
+                .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                #endif
+        }
+        #if !os(tvOS)
+        .buttonStyle(.plain)
+        .help(help)
+        #endif
     }
 
     private func episodes(_ item: LibraryItem) -> some View {
@@ -332,17 +489,19 @@ struct MediaDetailView: View {
 
     // MARK: Helpers
 
+    /// "2019   2 giờ 10 phút   ★ 7.8   4K HDR10" — Infuse's facts next to the action buttons.
     private func metaLine(_ item: LibraryItem) -> String {
         var parts: [String] = []
         if let year = item.year { parts.append(String(year)) }
         if item.kind == .show {
-            let count = files.count
-            parts.append("\(seasons.count) mùa · \(count) tập")
+            parts.append("\(max(1, seasons.count)) mùa · \(files.count) tập")
         } else if let runtime = item.runtime, runtime > 0 {
-            parts.append("\(runtime / 60)h \(runtime % 60)m")
+            parts.append(runtime >= 60 ? "\(runtime / 60) giờ \(runtime % 60) phút" : "\(runtime) phút")
         }
         if let rating = item.rating, rating > 0 { parts.append("★ " + String(format: "%.1f", rating)) }
-        return parts.joined(separator: " · ")
+        if let badges = files.first?.badges, !badges.isEmpty { parts.append(badges.prefix(3).joined(separator: " ")) }
+        if !item.genres.isEmpty, item.kind == .movie { parts.append(item.genres.prefix(2).joined(separator: ", ")) }
+        return parts.joined(separator: "    ")
     }
 
     private func playLabel(_ item: LibraryItem, target: LibraryFile, resume: Double?) -> String {
@@ -360,16 +519,50 @@ struct MediaDetailView: View {
     }
 
     #if os(tvOS)
-    private static let heroHeight: CGFloat = 700
-    private static let posterWidth: CGFloat = 260
+    private static let heroMin: CGFloat = 640
+    private static let heroMax: CGFloat = 860
     private static let titleSize: CGFloat = 58
+    private static let squareIcon: CGFloat = 24
     private static let castSize: CGFloat = 130
     #else
-    private static let heroHeight: CGFloat = 480
-    private static let posterWidth: CGFloat = 150
-    private static let titleSize: CGFloat = 36
+    private static let heroMin: CGFloat = 400
+    private static let heroMax: CGFloat = 820
+    private static let titleSize: CGFloat = 34
+    private static let squareIcon: CGFloat = 15
     private static let castSize: CGFloat = 76
     #endif
+}
+
+/// Thin progress line under the hero with the resume point and the length (Infuse's detail page).
+private struct ResumeLine: View {
+    let position: Double
+    let duration: Double
+
+    var body: some View {
+        let fraction = min(1, max(0, position / duration))
+        VStack(spacing: 5) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.16))
+                    Capsule().fill(Theme.leaf).frame(width: max(4, geo.size.width * fraction))
+                }
+            }
+            .frame(height: 4)
+            GeometryReader { geo in
+                let x = geo.size.width * fraction
+                ZStack(alignment: .topLeading) {
+                    Text(TimeFormat.clock(position))
+                        .fixedSize()
+                        .position(x: min(max(x, 24), max(24, geo.size.width - 90)), y: 7)
+                    Text(TimeFormat.clock(duration))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            }
+            .frame(height: 15)
+            .font(.caption.weight(.medium).monospacedDigit())
+            .foregroundStyle(.white.opacity(0.6))
+        }
+    }
 }
 
 private struct EpisodeRow: View {
