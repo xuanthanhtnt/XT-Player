@@ -27,10 +27,13 @@ struct PlayerScreen: View {
     @State private var scrubDelta: Double?
     @State private var nowPlaying = NowPlayingController()
     @State private var panel: PlayerPanel?
-    @State private var isFullScreen = false
     @State private var lastPointerReset = Date.distantPast
+    @State private var pointerOnControls = false
     #if os(tvOS)
     @FocusState private var surfaceFocused: Bool
+    #endif
+    #if os(macOS)
+    @StateObject private var window = PlayerWindowController()
     #endif
 
     init(session: PlaybackSession, onClose: @escaping () -> Void) {
@@ -46,11 +49,21 @@ struct PlayerScreen: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            PlayerSurface(engine: engine)
+            PlayerSurface(engine: engine, videoAspect: engine.video.displayAspect, fit: engine.videoFit)
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
 
             inputLayer
+
+            #if os(macOS)
+            if controlsVisible {
+                // Fades out (rather than vanishing) once the window is in full screen.
+                titleBand
+                    .opacity(isFullScreen ? 0 : 1)
+                    .animation(.easeInOut(duration: 0.3), value: isFullScreen)
+                    .transition(.opacity)
+            }
+            #endif
 
             if controlsVisible {
                 PlayerControlsOverlay(
@@ -64,10 +77,17 @@ struct PlayerScreen: View {
                     skipForward: Double(skipForward),
                     panel: $panel,
                     isFullScreen: isFullScreen,
+                    isMini: isMini,
+                    topInset: titlebarHeight,
                     onClose: close,
                     onNext: { advance(by: 1) },
                     onPrevious: { advance(by: -1) },
                     onToggleFullScreen: toggleFullScreen,
+                    onToggleMini: toggleMini,
+                    onHoverControls: { inside in
+                        pointerOnControls = inside
+                        if !inside { scheduleHide() }
+                    },
                     onInteraction: scheduleHide
                 )
                 .transition(.opacity)
@@ -149,11 +169,44 @@ struct PlayerScreen: View {
         .onContinuousHover { phase in
             if case .active = phase { pointerMoved() }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in isFullScreen = true }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in isFullScreen = false }
-        .onAppear { isFullScreen = Self.window?.styleMask.contains(.fullScreen) ?? false }
+        .background(WindowReader { window.attach($0) })
+        // The window takes the video's shape (no bars), and the traffic lights fade with the controls.
+        .onChange(of: engine.video.displayAspect) { _, aspect in window.setVideoAspect(aspect) }
+        .onChange(of: controlsVisible) { _, visible in window.setTitlebarButtonsVisible(visible) }
         #endif
     }
+
+    #if os(macOS)
+    private var isFullScreen: Bool { window.isFullScreen }
+    private var isMini: Bool { window.isMini }
+    private var titlebarHeight: CGFloat { window.titlebarHeight }
+
+    /// The window's (transparent) title bar, Infuse-style: frosted band with the title in the middle.
+    private var titleBand: some View {
+        VStack(spacing: 0) {
+            Text(current.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.88))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.horizontal, 86) // clear of the traffic lights
+                .frame(maxWidth: .infinity)
+                .frame(height: titlebarHeight)
+                .background(.ultraThinMaterial)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Color.black.opacity(0.25)).frame(height: 0.5)
+                }
+                .environment(\.colorScheme, .dark)
+            Spacer(minLength: 0)
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+    }
+    #else
+    private var isFullScreen: Bool { false }
+    private var isMini: Bool { false }
+    private var titlebarHeight: CGFloat { 0 }
+    #endif
 
     // MARK: Input
 
@@ -216,7 +269,8 @@ struct PlayerScreen: View {
             Button("") { toggleFullScreen() }.keyboardShortcut("f", modifiers: [])
             Button("") { engine.toggleMute(); showControls() }.keyboardShortcut("m", modifiers: [])
             Button("") { togglePanel(.info) }.keyboardShortcut("i", modifiers: [])
-            Button("") { togglePanel(.tracks) }.keyboardShortcut("t", modifiers: [])
+            Button("") { togglePanel(.subtitles) }.keyboardShortcut("t", modifiers: [])
+            Button("") { togglePanel(.audio) }.keyboardShortcut("a", modifiers: [])
             Button("") { escape() }.keyboardShortcut(.escape, modifiers: [])
         }
         .opacity(0)
@@ -228,6 +282,8 @@ struct PlayerScreen: View {
         if panel != nil {
             panel = nil
             scheduleHide()
+        } else if isMini {
+            toggleMini()
         } else if isFullScreen {
             toggleFullScreen()
         } else {
@@ -242,14 +298,19 @@ struct PlayerScreen: View {
 
     private func toggleFullScreen() {
         #if os(macOS)
-        Self.window?.toggleFullScreen(nil)
+        window.toggleFullScreen()
+        showControls()
+        #endif
+    }
+
+    private func toggleMini() {
+        #if os(macOS)
+        window.toggleMini()
         showControls()
         #endif
     }
 
     #if os(macOS)
-    private static var window: NSWindow? { NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first { $0.isVisible } }
-
     private func pointerMoved() {
         if !controlsVisible {
             showControls()
@@ -262,7 +323,7 @@ struct PlayerScreen: View {
 
     private func doubleTap(at fraction: CGFloat) {
         #if os(macOS)
-        toggleFullScreen()
+        if isMini { toggleMini() } else { toggleFullScreen() }
         #else
         if fraction < 0.35 {
             jump(-Double(skipBack))
@@ -312,6 +373,9 @@ struct PlayerScreen: View {
         nowPlaying.detach()
         engine.shutdown()
         access = nil
+        #if os(macOS)
+        window.detach()
+        #endif
         #if os(iOS) || os(tvOS)
         UIApplication.shared.isIdleTimerDisabled = false
         #endif
@@ -436,7 +500,7 @@ struct PlayerScreen: View {
         hideTask?.cancel()
         hideTask = Task {
             try? await Task.sleep(for: .seconds(5))
-            guard !Task.isCancelled, engine.state == .playing, panel == nil else { return }
+            guard !Task.isCancelled, engine.state == .playing, panel == nil, !pointerOnControls else { return }
             hideControls()
         }
     }
