@@ -110,7 +110,8 @@ jobs:
         run: |
           if [ "${{ matrix.platform }}" = "macOS" ]; then
             # Ad-hoc signature so the app launches on Apple Silicon (right-click ▸ Open the first time).
-            SIGNING=(CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER=)
+            # Hardened Runtime stays off here: its library validation rejects ad-hoc signed embedded frameworks.
+            SIGNING=(CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= ENABLE_HARDENED_RUNTIME=NO)
           else
             SIGNING=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM=)
           fi
@@ -166,6 +167,10 @@ jobs:
           ICON_NAME=$(plist CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName); [ "$ICON_NAME" = "-" ] && ICON_NAME=$(plist CFBundleIconName)
           ICONS=$(xcrun assetutil --info "$RES/Assets.car" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sum(1 for r in d if "Icon" in str(r.get("Name","")) or "Shelf" in str(r.get("Name",""))))')
           LINKED=$(xcrun otool -L "$BIN")
+          if [ "${{ matrix.platform }}" = "macOS" ]; then
+            codesign --verify --deep --strict "$APP" && echo "codesign: valid (ad-hoc)"
+            codesign -d --entitlements :- "$APP" 2>/dev/null | grep -c "<key>" | xargs -I{} echo "entitlements: {} keys"
+          fi
           if grep -qi "Libmpv.framework" <<<"$LINKED" && [ -e "$FW/Libmpv.framework" ]; then LIBMPV="embedded"; else LIBMPV="MISSING"; fi
           ICON_KEYS=$(plutil -convert json -o - "$PLIST" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(",".join(sorted(k for k in d if "Icon" in k or "TopShelf" in k)))')
           FWS=$( [ -d "$FW" ] && ls "$FW" | tr '\n' ' ' || echo none)
