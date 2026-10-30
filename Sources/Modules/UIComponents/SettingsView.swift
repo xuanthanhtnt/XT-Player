@@ -44,11 +44,17 @@ struct SettingsView: View {
                 Text("Áp dụng cho lần phát tiếp theo.")
             }
 
-            Section("Âm thanh") {
+            Section {
                 TextField("Ngôn ngữ âm thanh ưu tiên (vd: vie,eng)", text: $audioLanguages)
                     .autocorrectionDisabled()
                 #if os(macOS)
-                Toggle("Bitstream TrueHD / DTS-HD / E-AC3 qua HDMI (độc quyền)", isOn: $audioPassthrough)
+                Toggle("Bitstream TrueHD / DTS-HD / E-AC3 qua HDMI", isOn: $audioPassthrough)
+                #endif
+            } header: {
+                Text("Âm thanh")
+            } footer: {
+                #if os(macOS)
+                Text("Chỉ cần khi Mac nối ampli / receiver qua HDMI. Lúc bitstream, âm lượng chỉnh trên ampli. Loa máy, tai nghe, AirPlay luôn phát bình thường và chỉnh âm lượng được.")
                 #endif
             }
 

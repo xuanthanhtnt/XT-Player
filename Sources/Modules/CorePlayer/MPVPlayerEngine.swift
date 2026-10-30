@@ -265,6 +265,9 @@ final class MPVPlayerEngine: ObservableObject {
     @Published private(set) var videoFit: VideoFit = .fit
     /// mpv audio output actually in use ("coreaudio", "audiounit", "avfoundation"), empty = none.
     @Published private(set) var audioOutput = ""
+
+    /// Bitstreaming to a receiver: the volume is the receiver's, not the app's or the system's.
+    var isBitstreaming: Bool { audioOutput == "coreaudio_exclusive" }
     @Published private(set) var videoBitrate: Double = 0
     @Published private(set) var audioBitrate: Double = 0
     @Published private(set) var volume: Double = 100
@@ -517,8 +520,10 @@ final class MPVPlayerEngine: ObservableObject {
         // The system mixer's layout: stereo speakers get a proper downmix, multichannel devices get more.
         settings.append(("audio-channels", "auto-safe"))
         if options.audioPassthrough {
+            // No audio-exclusive: mpv's CoreAudio output takes exclusive (hog) mode by itself only while it
+            // bitstreams, and outputs without a digital format (built-in speakers, headphones) fall back to
+            // decoded PCM on the shared mixer, so the system volume keeps working for everything else.
             settings.append(("audio-spdif", "ac3,eac3,dts,dts-hd,truehd"))
-            settings.append(("audio-exclusive", "yes"))
         }
         #elseif os(tvOS)
         settings.append(("ao", "audiounit,avfoundation,"))

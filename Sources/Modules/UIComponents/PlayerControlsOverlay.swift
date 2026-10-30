@@ -129,7 +129,10 @@ struct PlayerControlsOverlay: View {
                             onInteraction()
                         })
                         .frame(width: 80)
-                        .help("Âm lượng — M: tắt / bật tiếng")
+                        .disabled(engine.isBitstreaming)
+                        .opacity(engine.isBitstreaming ? 0.4 : 1)
+                        .help(engine.isBitstreaming ? "Đang bitstream qua HDMI — chỉnh âm lượng trên ampli / receiver"
+                                                    : "Âm lượng — M: tắt / bật tiếng")
                     }
                     Spacer(minLength: 0)
                     HStack(spacing: 0) {
@@ -1235,7 +1238,8 @@ struct InfoPanel: View {
                 if engine.audio.channels > 0 { row("Kênh", MediaTrack.channelLayout(engine.audio.channels)) }
                 if engine.audio.sampleRate > 0 { row("Tần số", String(format: "%.1f kHz", Double(engine.audio.sampleRate) / 1000)) }
                 if engine.audio.outputChannels > 0 { row("Kênh ra", MediaTrack.channelLayout(engine.audio.outputChannels)) }
-                row("Đầu ra", engine.audioOutput.isEmpty ? "Chưa mở — không có tiếng" : engine.audioOutput,
+                row("Đầu ra", engine.audioOutput.isEmpty ? "Chưa mở — không có tiếng"
+                        : engine.isBitstreaming ? "Bitstream qua HDMI — âm lượng chỉnh trên ampli" : engine.audioOutput,
                     warning: engine.audioOutput.isEmpty && !engine.audioTracks.isEmpty)
                 row("Âm lượng", engine.isMuted ? "Đang tắt tiếng" : "\(Int(engine.volume))%", warning: engine.isMuted)
                 if engine.audioBitrate > 0 { row("Bitrate", Self.bitrate(engine.audioBitrate)) }
