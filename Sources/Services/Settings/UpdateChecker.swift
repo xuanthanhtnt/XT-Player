@@ -1,12 +1,9 @@
 import Foundation
 import SwiftUI
-#if os(macOS)
-import AppKit
-#endif
 
 /// Looks for a newer XT-Player on GitHub Releases (CI publishes one per `v*` tag with the .dmg / .ipa files).
-/// macOS downloads the DMG and opens it for a drag-to-Applications install (a sandboxed app cannot replace
-/// itself); iOS opens the release page to sideload the new .ipa; tvOS can only tell the user.
+/// macOS hands the DMG link to the browser for a drag-to-Applications install; iOS opens the release page to
+/// sideload the new .ipa; tvOS can only tell the user.
 @MainActor
 final class UpdateChecker: ObservableObject {
     static let shared = UpdateChecker()
@@ -28,8 +25,6 @@ final class UpdateChecker: ObservableObject {
         case checking
         case upToDate
         case available
-        case downloading
-        case downloaded(URL)
         case failed(String)
     }
 
@@ -59,7 +54,7 @@ final class UpdateChecker: ObservableObject {
     }
 
     func check(userInitiated: Bool, announceResult: Bool = false) async {
-        guard phase != .checking, phase != .downloading else { return }
+        guard phase != .checking else { return }
         phase = .checking
         do {
             let release = try await fetchNewest()
@@ -85,39 +80,23 @@ final class UpdateChecker: ObservableObject {
         UserDefaults.standard.set(release.version, forKey: Self.skippedKey)
     }
 
-    /// macOS: downloads the DMG and opens it. iOS: opens the release page. tvOS: nothing to open.
-    func install(_ release: Release, openURL: (URL) -> Void) async {
+    /// macOS: the browser downloads the DMG. A file a sandboxed app writes gets a hard quarantine that stops the
+    /// app copied out of it from ever launching ("can't be opened"); a browser download gets the normal one, which
+    /// Gatekeeper lets the user approve. iOS: opens the release page. tvOS: nothing to open.
+    func install(_ release: Release, openURL: (URL) -> Void) {
         #if os(macOS)
         guard let download = release.download else { return openURL(release.page) }
-        phase = .downloading
-        do {
-            let (temporary, response) = try await URLSession.shared.download(from: download)
-            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                throw RemoteError.badResponse(http.statusCode)
-            }
-            let folder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("Updates", isDirectory: true)
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let target = folder.appendingPathComponent("XT-Player-\(release.version).dmg")
-            try? FileManager.default.removeItem(at: target)
-            try FileManager.default.moveItem(at: temporary, to: target)
-            phase = .downloaded(target)
-            NSWorkspace.shared.open(target)
-            notice = "Đã mở bộ cài XT-Player \(release.version). Thoát app, kéo XT-Player vào Applications (chọn Thay thế) rồi mở lại."
-        } catch {
-            phase = .failed("Tải bản cập nhật thất bại: \(error.localizedDescription)")
-        }
+        openURL(download)
+        notice = Self.macInstallSteps(release.version)
         #elseif os(iOS)
         openURL(release.page)
         #endif
     }
 
-    #if os(macOS)
-    /// After the DMG opened: quit so the copy in Applications can be replaced.
-    func quitToInstall() {
-        NSApp.terminate(nil)
+    static func macInstallSteps(_ version: String) -> String {
+        "Trình duyệt đang tải XT-Player \(version) (.dmg, thư mục Tải về). Thoát XT-Player, mở file .dmg, kéo XT-Player vào "
+            + "Applications (chọn Thay thế). Nếu macOS chặn mở: Cài đặt Hệ thống ▸ Quyền riêng tư & Bảo mật ▸ Vẫn mở."
     }
-    #endif
 
     // MARK: GitHub
 
@@ -190,7 +169,7 @@ struct UpdateSection: View {
             } label: {
                 Label("Kiểm tra cập nhật", systemImage: "arrow.down.circle")
             }
-            .disabled(updates.phase == .checking || updates.phase == .downloading)
+            .disabled(updates.phase == .checking)
         } header: {
             Text("Cập nhật")
         } footer: {
@@ -219,10 +198,10 @@ struct UpdateSection: View {
                 Text("Cài bản mới bằng công cụ sideload (atvloadly, Xcode) hoặc TestFlight.").foregroundStyle(.secondary)
                 #else
                 Button {
-                    Task { await updates.install(release) { openURL($0) } }
+                    updates.install(release) { openURL($0) }
                 } label: {
                     #if os(macOS)
-                    Label(release.downloadSize > 0 ? "Tải và cài (\(ByteCountFormatter.string(fromByteCount: release.downloadSize, countStyle: .file)))" : "Tải và cài",
+                    Label(release.downloadSize > 0 ? "Tải bản cập nhật (\(ByteCountFormatter.string(fromByteCount: release.downloadSize, countStyle: .file)))" : "Tải bản cập nhật",
                           systemImage: "square.and.arrow.down")
                     #else
                     Label("Mở trang tải bản mới", systemImage: "safari")
@@ -230,14 +209,6 @@ struct UpdateSection: View {
                 }
                 #endif
             }
-        case .downloading:
-            HStack(spacing: 8) { ProgressView(); Text("Đang tải bản cập nhật…").foregroundStyle(.secondary) }
-        case .downloaded:
-            Text("Đã mở bộ cài. Thoát XT-Player, kéo XT-Player vào Applications (chọn Thay thế), rồi mở lại.")
-                .foregroundStyle(.secondary)
-            #if os(macOS)
-            Button("Thoát để cài đặt") { updates.quitToInstall() }
-            #endif
         case let .failed(message):
             Text(message).foregroundStyle(Theme.danger)
         }
@@ -255,7 +226,7 @@ struct UpdatePromptModifier: ViewModifier {
             .alert("Có bản XT-Player mới", isPresented: Binding(get: { updates.prompt != nil }, set: { if !$0 { updates.prompt = nil } }),
                    presenting: updates.prompt) { release in
                 #if !os(tvOS)
-                Button("Cập nhật") { Task { await updates.install(release) { openURL($0) } } }
+                Button("Cập nhật") { updates.install(release) { openURL($0) } }
                 #endif
                 Button("Bỏ qua bản này") { updates.skip(release) }
                 Button("Để sau", role: .cancel) {}

@@ -29,7 +29,7 @@
 | Giao diện | Thanh bên (Mac / iPad / Apple TV) hoặc tab (iPhone); trên Mac nhóm kiểu Infuse: Tìm kiếm · Trang chủ · **Thư viện** (Phim, TV Shows, Mới thêm, Chưa xem, Điểm cao, Thể loại) · **Tệp** (từng máy chủ & thư mục) · Cài đặt; **banner nổi bật** tự xoay vòng, kệ *Tiếp tục xem* / *Mới thêm*; trang chi tiết kiểu Infuse (ảnh nền lớn, nút *Tiếp tục 00:12:15*, nút vuông, vạch tiến độ) |
 | Player | Thanh điều khiển nổi (kính mờ), thanh tua có bong bóng thời gian + tên chương, **bảng ⚙︎ có tab** Âm thanh · Phụ đề · Video · Chương · Thông tin (codec, HDR, bitrate, đầu ra âm thanh, nhật ký libmpv), hàng đợi + **Up Next**, tốc độ 0.5–2×, Fit / Fill / Stretch, Now Playing, chạm đúp / vuốt để tua; **ảnh xem trước khi tua** (scrub thumbnails); **tìm & tải phụ đề OpenSubtitles** ngay trong bảng Phụ đề; **AirPlay lên Apple TV / TV AirPlay** (Mac, iPhone/iPad) |
 | Trakt | Đăng nhập bằng mã (cả Apple TV), **scrobble** khi xem, **đồng bộ đã xem và điểm xem tiếp** giữa Mac / iPhone / Apple TV (và Infuse nếu cũng nối Trakt) |
-| Cập nhật | Tự kiểm tra GitHub Releases mỗi ngày; Mac tải và mở bộ cài .dmg, iPhone/iPad mở trang tải; **Cài đặt ▸ Cập nhật** hoặc menu *Kiểm tra cập nhật…* |
+| Cập nhật | Tự kiểm tra GitHub Releases mỗi ngày; Mac tải .dmg qua trình duyệt, iPhone/iPad mở trang tải; **Cài đặt ▸ Cập nhật** hoặc menu *Kiểm tra cập nhật…* |
 | macOS | Bản cài **.dmg**; trình phát kiểu Infuse (nút *Đóng*, thanh nổi: âm lượng · ⏮ ↺ ▶ ↻ ⏭ · ⚙︎ · cửa sổ nổi · toàn màn hình); **cửa sổ lấy đúng tỉ lệ video — không viền đen**, dải tiêu đề mờ; **cửa sổ nổi** (nhỏ, luôn ở trên); âm lượng + chọn thiết bị phát, rê chuột hiện điều khiển / tự ẩn con trỏ; phím tắt Space ← → ↑ ↓ N M A I T Z X F Esc |
 
 ### So với Infuse
@@ -139,7 +139,7 @@ Mở **Cài đặt ▸ Nhật ký trình phát** (hoặc nút ⓘ trong player �
 - SMB đi qua cầu `xtsmb://` của app (SMBClient, MIT), nên vẫn giữ được MPVKit bản LGPL. NFS chưa hỗ trợ.
 - Trên tvOS, thư viện được lưu trong thư mục Caches (giới hạn của tvOS). Nếu hệ thống dọn bộ nhớ thì quét lại; nối Trakt để điểm xem dở và trạng thái đã xem được giữ trên Trakt.
 - **AirPlay** gửi tệp gốc cho TV (TV tự kéo dữ liệu từ máy bạn qua mạng LAN, không transcode), nên chỉ phát được định dạng AVPlayer hỗ trợ: MP4 / MOV / M4V với H.264 hoặc HEVC (AV1 chỉ trên TV có giải mã AV1). MKV và các định dạng khác: dùng *Phản chiếu màn hình*. Máy và TV phải cùng mạng.
-- **Cập nhật trong app** dựa trên GitHub Releases (tạo bằng tag `v*`). Bản Mac là app sandbox nên không tự thay chính nó: app tải .dmg và mở bộ cài, bạn kéo vào Applications.
+- **Cập nhật trong app** dựa trên GitHub Releases (tạo bằng tag `v*`). Bản Mac mở link .dmg bằng trình duyệt để bạn kéo vào Applications (tệp do app sandbox tự tải bị macOS cách ly cứng, app chép ra từ đó không mở được).
 
 ## Lộ trình
 
