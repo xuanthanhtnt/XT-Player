@@ -20,6 +20,7 @@ struct TMDbClient {
 
     static func imageURL(_ path: String?, size: String = "w500") -> URL? {
         guard let path, !path.isEmpty else { return nil }
+        if let local = ThumbnailStore.url(for: path) { return local }
         return URL(string: "https://image.tmdb.org/t/p/\(size)\(path)")
     }
 

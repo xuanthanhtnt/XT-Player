@@ -8,6 +8,7 @@ final class LibraryScanner: ObservableObject {
     @Published private(set) var isScanning = false
     @Published private(set) var status = ""
     @Published private(set) var lastError: String?
+    private var isGeneratingArtwork = false
 
     private static let skippedFolders: Set<String> = [
         "@eadir", "#recycle", "#snapshot", ".snapshots", "$recycle.bin", "system volume information",
@@ -135,6 +136,61 @@ final class LibraryScanner: ObservableObject {
         folder.fileCount = found.count
         try? context.save()
         status = "Đã quét \(found.count) tệp trong \(folder.name)"
+        Task { await generateMissingArtwork(context: context) }
+    }
+
+    /// Items without TMDb artwork (home videos, concerts, unmatched titles) and Continue Watching entries
+    /// without a picture get a frame of their video, as Infuse does. Runs after each scan and once at launch.
+    func generateMissingArtwork(context: ModelContext) async {
+        guard !isGeneratingArtwork else { return }
+        isGeneratingArtwork = true
+        defer { isGeneratingArtwork = false }
+
+        let items = ((try? context.fetch(FetchDescriptor<LibraryItem>())) ?? [])
+            .filter { !ThumbnailStore.isUsable($0.posterPath) && !ThumbnailStore.isUsable($0.backdropPath) }
+        let filesByItem = Dictionary(grouping: (try? context.fetch(FetchDescriptor<LibraryFile>())) ?? [], by: \.itemKey)
+        let servers = Dictionary(((try? context.fetch(FetchDescriptor<MediaServer>())) ?? []).map { ($0.id, $0.credentials) },
+                                 uniquingKeysWith: { first, _ in first })
+        let entries = Dictionary(((try? context.fetch(FetchDescriptor<MediaEntry>())) ?? []).map { ($0.key, $0) },
+                                 uniquingKeysWith: { first, _ in first })
+        let previousStatus = status
+
+        for (index, item) in items.enumerated() {
+            let files = (filesByItem[item.key] ?? []).sorted { ($0.season ?? 0, $0.episode ?? 0, $0.path) < ($1.season ?? 0, $1.episode ?? 0, $1.path) }
+            guard let file = files.first, let serverID = file.serverID, let server = servers[serverID],
+                  let url = RemoteFileSystems.playbackURL(server: server, path: file.path) else { continue }
+            let reference = ThumbnailStore.reference(forKey: file.key)
+            guard let output = ThumbnailStore.url(for: reference) else { continue }
+            if !FileManager.default.fileExists(atPath: output.path) {
+                status = "Tạo ảnh bìa \(index + 1)/\(items.count)…"
+                RemoteCredentialStore.shared.register(server)
+                let location = url.absoluteString
+                let grabbed = await Task.detached(priority: .utility) { FrameGrabber.grab(location, to: output) }.value
+                guard grabbed else { continue }
+            }
+            item.posterPath = reference
+            item.backdropPath = reference
+            for file in files {
+                if let entry = entries[file.key], entry.artworkPath == nil { entry.artworkPath = reference }
+            }
+            try? context.save()
+        }
+
+        // Continue Watching entries opened straight from a share (not part of the library).
+        for entry in entries.values where entry.artworkPath == nil && entry.urlString.hasPrefix("xtsmb:") {
+            guard let serverID = entry.serverID, let server = servers[serverID] else { continue }
+            let reference = ThumbnailStore.reference(forKey: entry.key)
+            guard let output = ThumbnailStore.url(for: reference) else { continue }
+            if !FileManager.default.fileExists(atPath: output.path) {
+                RemoteCredentialStore.shared.register(server)
+                let location = entry.urlString
+                let grabbed = await Task.detached(priority: .utility) { FrameGrabber.grab(location, to: output) }.value
+                guard grabbed else { continue }
+            }
+            entry.artworkPath = reference
+            try? context.save()
+        }
+        status = previousStatus
     }
 
     /// Re-fetch TMDb metadata for one item (e.g. after a wrong match or adding a key).

@@ -44,6 +44,11 @@ struct PlayerControlsOverlay: View {
     /// macOS: the pointer entered / left the control bar (the controls stay up while it is there).
     var onHoverControls: (Bool) -> Void = { _ in }
     let onInteraction: () -> Void
+    #if os(tvOS)
+    var airPlay: Void? = nil
+    #else
+    var airPlay: AirPlayController? = nil
+    #endif
 
     /// Time shown while dragging the scrubber, and until the seek lands.
     @State private var scrubPosition: Double?
@@ -128,6 +133,10 @@ struct PlayerControlsOverlay: View {
                     }
                     Spacer(minLength: 0)
                     HStack(spacing: 0) {
+                        if let airPlay {
+                            AirPlayButton(controller: airPlay, size: 28)
+                                .frame(width: 36, height: 30)
+                        }
                         barButton(help: "Âm thanh, phụ đề, video, thông tin") {
                             panel = panel == nil ? .audio : nil
                         } label: {
@@ -371,6 +380,12 @@ struct PlayerControlsOverlay: View {
                 }
             }
             Spacer(minLength: 0)
+
+            #if os(iOS)
+            if let airPlay {
+                AirPlayButton(controller: airPlay, size: 36)
+            }
+            #endif
 
             if showStartOver {
                 Button {
@@ -1195,6 +1210,8 @@ struct ChaptersPanel: View {
 struct InfoPanel: View {
     @ObservedObject var engine: MPVPlayerEngine
     @State private var logLines: [String] = []
+    @State private var bridgeRate: Double = 0
+    @State private var lastTraffic: (time: Date, bytes: Int64)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -1225,6 +1242,8 @@ struct InfoPanel: View {
             }
             section("Bộ đệm") {
                 row("Đã nạp trước", "\(Int(engine.bufferedSeconds)) s")
+                let speed = engine.readsThroughBridge ? bridgeRate : engine.readSpeed
+                if speed > 0 { row("Tốc độ mạng", Self.bitrate(speed * 8)) }
             }
             section("Nhật ký libmpv") {
                 LogLines(lines: Array(logLines.suffix(60)))
@@ -1241,7 +1260,14 @@ struct InfoPanel: View {
         }
     }
 
-    private func refresh() { logLines = MPVLogBuffer.shared.snapshot() }
+    private func refresh() {
+        logLines = MPVLogBuffer.shared.snapshot()
+        let now = Date(), bytes = StreamTrafficMeter.shared.totalBytes
+        if let last = lastTraffic, now.timeIntervalSince(last.time) > 0.5 {
+            bridgeRate = Double(bytes - last.bytes) / now.timeIntervalSince(last.time)
+        }
+        lastTraffic = (now, bytes)
+    }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {

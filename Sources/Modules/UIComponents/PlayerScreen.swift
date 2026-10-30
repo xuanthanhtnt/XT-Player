@@ -11,6 +11,9 @@ struct PlayerScreen: View {
     let onClose: () -> Void
 
     @StateObject private var engine = MPVPlayerEngine()
+    #if !os(tvOS)
+    @StateObject private var airPlay = AirPlayController()
+    #endif
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppSettings.autoplayNext) private var autoplayNext = true
@@ -65,7 +68,7 @@ struct PlayerScreen: View {
             }
             #endif
 
-            if controlsVisible {
+            if controlsVisible && !airPlayActive {
                 PlayerControlsOverlay(
                     engine: engine,
                     title: current.title,
@@ -88,20 +91,35 @@ struct PlayerScreen: View {
                         pointerOnControls = inside
                         if !inside { scheduleHide() }
                     },
-                    onInteraction: scheduleHide
+                    onInteraction: scheduleHide,
+                    airPlay: airPlayController
                 )
                 .transition(.opacity)
             }
 
+            #if !os(tvOS)
+            if airPlay.isActive {
+                AirPlayActiveView(controller: airPlay, title: current.title, onClose: close)
+                    .transition(.opacity)
+            }
+            #endif
+
             if engine.isBuffering || engine.state == .loading {
-                ProgressView()
-                    #if !os(tvOS)
-                    .controlSize(.large)
-                    #endif
-                    .tint(.white)
-                    .padding(28)
-                    .glassPanel(cornerRadius: 24)
-                    .allowsHitTesting(false)
+                VStack(spacing: 12) {
+                    ProgressView()
+                        #if !os(tvOS)
+                        .controlSize(.large)
+                        #endif
+                        .tint(.white)
+                    if engine.isBuffering && engine.bufferingProgress > 0 {
+                        Text("\(engine.bufferingProgress)%")
+                            .font(.callout.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.85))
+                    }
+                }
+                .padding(28)
+                .glassPanel(cornerRadius: 24)
+                .allowsHitTesting(false)
             }
 
             if let text = seekFlash ?? scrubText {
@@ -124,6 +142,13 @@ struct PlayerScreen: View {
         }
         .animation(.easeInOut(duration: 0.25), value: controlsVisible)
         .animation(.easeInOut(duration: 0.25), value: upNextCountdown != nil)
+        #if !os(tvOS)
+        .alert("AirPlay", isPresented: Binding(get: { airPlay.message != nil }, set: { if !$0 { airPlay.message = nil } })) {
+            Button("OK", role: .cancel) { airPlay.message = nil }
+        } message: {
+            Text(airPlay.message ?? "")
+        }
+        #endif
         .onAppear(perform: start)
         .onDisappear(perform: stop)
         .onChange(of: scenePhase) { _, phase in
@@ -345,6 +370,14 @@ struct PlayerScreen: View {
     // MARK: Lifecycle
 
     private func start() {
+        #if !os(tvOS)
+        airPlay.currentPosition = { [engine] in engine.position }
+        airPlay.onStart = { [engine] in engine.pause() }
+        airPlay.onFinish = { [engine] position in
+            engine.seek(to: position)
+            engine.play()
+        }
+        #endif
         nowPlaying.attach(to: engine)
         nowPlaying.onNext = { advance(by: 1) }
         nowPlaying.onPrevious = { advance(by: -1) }
@@ -360,6 +393,10 @@ struct PlayerScreen: View {
         if let server = item.server { RemoteCredentialStore.shared.register(server) }
         entry = MediaLibrary.touch(item, in: context)
         try? context.save()
+        #if !os(tvOS)
+        if airPlay.isActive { airPlay.shutdown() }
+        airPlay.location = item.source.playbackLocation
+        #endif
         engine.load(item.source.playbackLocation, startAt: item.startAt, externalSubtitles: item.externalSubtitles)
         nowPlaying.setItem(title: item.title, subtitle: item.subtitle,
                            artworkURL: TMDbClient.imageURL(item.artworkPath, size: "w780"))
@@ -370,6 +407,9 @@ struct PlayerScreen: View {
         hideTask?.cancel()
         cancelUpNext()
         saveProgress()
+        #if !os(tvOS)
+        airPlay.shutdown()
+        #endif
         nowPlaying.detach()
         engine.shutdown()
         access = nil
@@ -387,10 +427,30 @@ struct PlayerScreen: View {
     }
 
     private func saveProgress() {
+        #if !os(tvOS)
+        if airPlay.isActive, let entry, airPlay.duration > 0 {
+            MediaLibrary.saveProgress(entry, position: airPlay.position, duration: airPlay.duration, in: context)
+            return
+        }
+        #endif
         guard let entry, engine.duration > 0 || engine.position > 0 else { return }
         let finished = engine.state == .ended
         MediaLibrary.saveProgress(entry, position: finished ? engine.duration : engine.position, duration: engine.duration, in: context)
     }
+
+    private var airPlayActive: Bool {
+        #if os(tvOS)
+        return false
+        #else
+        return airPlay.isActive
+        #endif
+    }
+
+    #if os(tvOS)
+    private var airPlayController: Void? { nil }
+    #else
+    private var airPlayController: AirPlayController? { airPlay }
+    #endif
 
     private func advance(by step: Int) {
         let target = index + step
@@ -461,6 +521,9 @@ struct PlayerScreen: View {
     // MARK: Helpers
 
     private func togglePlayback() {
+        #if !os(tvOS)
+        if airPlay.isActive { return airPlay.togglePlayback() }
+        #endif
         if engine.state == .ended {
             engine.seek(to: 0)
             engine.play()
@@ -470,6 +533,9 @@ struct PlayerScreen: View {
     }
 
     private func jump(_ seconds: Double) {
+        #if !os(tvOS)
+        if airPlay.isActive { return airPlay.seek(by: seconds) }
+        #endif
         engine.seek(by: seconds)
         withAnimation(.spring(duration: 0.25)) { seekFlash = seconds > 0 ? "+\(Int(seconds))s" : "\(Int(seconds))s" }
         Task {

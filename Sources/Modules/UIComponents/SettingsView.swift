@@ -111,6 +111,8 @@ struct SettingsView: View {
                 Text("Nếu video không có tiếng / không phát: mở nhật ký ngay sau khi phát rồi bấm Sao chép để gửi lỗi.")
             }
 
+            UpdateSection()
+
             Section("Giới thiệu") {
                 LabeledContent("Phiên bản", value: HomeView.version)
                 LabeledContent("Lõi phát", value: "libmpv 0.41 · FFmpeg 9 · VideoToolbox")

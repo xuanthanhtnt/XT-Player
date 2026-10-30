@@ -7,24 +7,29 @@ struct ArtworkImage: View {
     var placeholderIcon = "film"
 
     var body: some View {
-        ZStack {
-            LinearGradient(colors: [Color.white.opacity(0.08), Color.white.opacity(0.03)], startPoint: .top, endPoint: .bottom)
-            if let url = TMDbClient.imageURL(path, size: size) {
-                AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.2))) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image.resizable().scaledToFill()
-                    case .failure:
-                        placeholder
-                    default:
-                        Color.clear
+        // The gradient takes the offered size; the image only fills it (a 16:9 video frame in a portrait
+        // poster slot must not widen the card or spill over its neighbours).
+        LinearGradient(colors: [Color.white.opacity(0.08), Color.white.opacity(0.03)], startPoint: .top, endPoint: .bottom)
+            .overlay {
+                if let url = TMDbClient.imageURL(path, size: size) {
+                    AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.2))) { phase in
+                        switch phase {
+                        case let .success(image):
+                            image.resizable().scaledToFill()
+                        case .failure:
+                            placeholder
+                        default:
+                            Color.clear
+                        }
                     }
+                } else {
+                    placeholder
                 }
-            } else {
-                placeholder
             }
-        }
-        .clipped()
+            .clipped()
+            // Clipping only affects drawing: keep taps and the accessibility frame inside the slot too.
+            .contentShape(Rectangle())
+            .accessibilityHidden(true)
     }
 
     private var placeholder: some View {

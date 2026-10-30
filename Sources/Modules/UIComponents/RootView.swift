@@ -69,9 +69,11 @@ struct RootView: View {
 
     var body: some View {
         content
+            .modifier(UpdatePromptModifier())
             .environment(\.play, PlayAction { session = $0 })
             .environment(\.openSection, { section = $0 })
             .environmentObject(scanner)
+            .task { await scanner.generateMissingArtwork(context: context) }
             #if !os(tvOS)
             .fileImporter(isPresented: $showImporter, allowedContentTypes: Self.playableTypes, allowsMultipleSelection: false) { result in
                 switch result {

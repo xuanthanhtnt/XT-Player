@@ -242,6 +242,12 @@ final class MPVPlayerEngine: ObservableObject {
     @Published private(set) var duration: Double = 0
     @Published private(set) var isBuffering = false
     @Published private(set) var bufferedSeconds: Double = 0
+    /// 0…100 while mpv refills the cache after an underrun.
+    @Published private(set) var bufferingProgress = 0
+    /// Bytes per second mpv reads from an HTTP(S) source (mpv `cache-speed`).
+    @Published private(set) var readSpeed: Double = 0
+    /// The current file comes through the app's xtsmb:// bridge (its traffic is in `StreamTrafficMeter`).
+    @Published private(set) var readsThroughBridge = false
     @Published private(set) var video = VideoSignal()
     @Published private(set) var audio = AudioSignal()
     @Published private(set) var hardwareDecoder = ""
@@ -353,6 +359,7 @@ final class MPVPlayerEngine: ObservableObject {
         position = 0
         duration = 0
         chapters = []
+        readsThroughBridge = location.hasPrefix("xtsmb:")
         queue.async {
             self.pendingSubtitles = externalSubtitles
             var args = ["loadfile", location, "replace", "-1"]
@@ -470,7 +477,13 @@ final class MPVPlayerEngine: ObservableObject {
             ("demuxer-max-bytes", "\(options.cacheMegabytes)MiB"),
             ("demuxer-max-back-bytes", "\(max(64, options.cacheMegabytes / 4))MiB"),
             ("demuxer-readahead-secs", "60"),
-            ("cache-pause-wait", "2"),
+            // After an underrun, refill several seconds before resuming instead of stuttering every 2 s;
+            // also buffer before the first frame so playback does not stall right after it starts.
+            ("cache-pause-wait", "4"),
+            ("cache-pause-initial", "yes"),
+            ("demuxer-seekable-cache", "yes"),
+            // WebDAV/HTTP: keep the connection across seeks and reconnect after a dropped connection.
+            ("stream-lavf-o", "reconnect=1,reconnect_on_network_error=1,reconnect_delay_max=5,multiple_requests=1"),
             ("network-timeout", "30"),
             ("user-agent", "XT-Player/0.1 (libmpv)"),
             // Subtitles: libass keeps .ass/.ssa styling & karaoke intact.
@@ -537,6 +550,8 @@ final class MPVPlayerEngine: ObservableObject {
             ("paused-for-cache", MPV_FORMAT_FLAG),
             ("eof-reached", MPV_FORMAT_FLAG),
             ("demuxer-cache-duration", MPV_FORMAT_DOUBLE),
+            ("cache-buffering-state", MPV_FORMAT_INT64),
+            ("cache-speed", MPV_FORMAT_INT64),
             ("track-list/count", MPV_FORMAT_INT64),
             ("aid", MPV_FORMAT_STRING),
             ("sid", MPV_FORMAT_STRING),
@@ -673,6 +688,12 @@ final class MPVPlayerEngine: ObservableObject {
         case "demuxer-cache-duration":
             let s = double()
             publish { $0.bufferedSeconds = s }
+        case "cache-buffering-state":
+            let v = int()
+            publish { $0.bufferingProgress = v }
+        case "cache-speed":
+            let v = Double(int())
+            publish { $0.readSpeed = v }
         case "track-list/count", "aid", "sid":
             refreshTracks(mpv)
         case "sub-delay":

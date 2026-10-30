@@ -23,6 +23,11 @@ struct XTPlayerApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unified)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Kiểm tra cập nhật…") {
+                    Task { await UpdateChecker.shared.check(userInitiated: true, announceResult: true) }
+                }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Mở tệp video…") {
                     NotificationCenter.default.post(name: .xtOpenFileRequested, object: nil)

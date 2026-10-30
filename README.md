@@ -15,7 +15,7 @@
 
 ---
 
-## Trạng thái: v0.2.1 — Giao diện kiểu Infuse
+## Trạng thái: v0.2.2 — Stream NAS mượt, AirPlay, tự cập nhật
 
 | Hạng mục | Có trong v0.2.1 |
 |---|---|
@@ -24,10 +24,11 @@
 | Apple TV | Match Content: tự đổi tần số quét & dải động (`AVDisplayManager`) |
 | Âm thanh | TrueHD, DTS-HD MA, DTS:X, E-AC3/Atmos, FLAC 24/192 → PCM 7.1; macOS bitstream qua HDMI; Night Mode; chỉnh lệch tiếng ±50 ms |
 | Phụ đề | libass (.ass giữ hiệu ứng), .srt/.vtt/PGS; **tự nạp phụ đề cạnh file trên NAS**; lệch ±0,1 s; cỡ/vị trí/nền chữ |
-| Ổ mạng | **SMB2/3** (SMBClient thuần Swift, stream thẳng vào mpv qua `xtsmb://`, không transcode), **WebDAV** (HTTP/HTTPS, Basic/Digest, chứng chỉ tự ký), **tự tìm NAS bằng Bonjour**; mật khẩu trong Keychain |
-| Thư viện | Quét thư mục NAS, nhận diện phim / tập, **poster, backdrop, diễn viên, tóm tắt, tên & ảnh từng tập từ TMDb**; hàng *Tiếp tục xem*, kệ Phim / TV Shows, trang chi tiết, chọn mùa, đánh dấu đã xem |
+| Ổ mạng | **SMB2/3** (SMBClient thuần Swift, stream thẳng vào mpv qua `xtsmb://`, không transcode; **4 kết nối song song + đọc trước + cache khối**, tự kết nối lại khi NAS ngắt), **WebDAV** (HTTP/HTTPS, Basic/Digest, chứng chỉ tự ký), **tự tìm NAS bằng Bonjour**; mật khẩu trong Keychain |
+| Thư viện | Quét thư mục NAS, nhận diện phim / tập, **poster, backdrop, diễn viên, tóm tắt, tên & ảnh từng tập từ TMDb**; không có trên TMDb thì **lấy khung hình trong video làm ảnh bìa** (như Infuse); hàng *Tiếp tục xem*, kệ Phim / TV Shows, trang chi tiết, chọn mùa, đánh dấu đã xem |
 | Giao diện | Thanh bên (Mac / iPad / Apple TV) hoặc tab (iPhone); trên Mac nhóm kiểu Infuse: Tìm kiếm · Trang chủ · **Thư viện** (Phim, TV Shows, Mới thêm, Chưa xem, Điểm cao, Thể loại) · **Tệp** (từng máy chủ & thư mục) · Cài đặt; **banner nổi bật** tự xoay vòng, kệ *Tiếp tục xem* / *Mới thêm*; trang chi tiết kiểu Infuse (ảnh nền lớn, nút *Tiếp tục 00:12:15*, nút vuông, vạch tiến độ) |
-| Player | Thanh điều khiển nổi (kính mờ), thanh tua có bong bóng thời gian + tên chương, **bảng ⚙︎ có tab** Âm thanh · Phụ đề · Video · Chương · Thông tin (codec, HDR, bitrate, đầu ra âm thanh, nhật ký libmpv), hàng đợi + **Up Next**, tốc độ 0.5–2×, Fit / Fill / Stretch, Now Playing, chạm đúp / vuốt để tua |
+| Player | Thanh điều khiển nổi (kính mờ), thanh tua có bong bóng thời gian + tên chương, **bảng ⚙︎ có tab** Âm thanh · Phụ đề · Video · Chương · Thông tin (codec, HDR, bitrate, đầu ra âm thanh, nhật ký libmpv), hàng đợi + **Up Next**, tốc độ 0.5–2×, Fit / Fill / Stretch, Now Playing, chạm đúp / vuốt để tua; **AirPlay lên Apple TV / TV AirPlay** (Mac, iPhone/iPad) |
+| Cập nhật | Tự kiểm tra GitHub Releases mỗi ngày; Mac tải và mở bộ cài .dmg, iPhone/iPad mở trang tải; **Cài đặt ▸ Cập nhật** hoặc menu *Kiểm tra cập nhật…* |
 | macOS | Bản cài **.dmg**; trình phát kiểu Infuse (nút *Đóng*, thanh nổi: âm lượng · ⏮ ↺ ▶ ↻ ⏭ · ⚙︎ · cửa sổ nổi · toàn màn hình); **cửa sổ lấy đúng tỉ lệ video — không viền đen**, dải tiêu đề mờ; **cửa sổ nổi** (nhỏ, luôn ở trên); âm lượng + chọn thiết bị phát, rê chuột hiện điều khiển / tự ẩn con trỏ; phím tắt Space ← → ↑ ↓ N M A I T Z X F Esc |
 
 ### So với Infuse
@@ -130,12 +131,15 @@ Mở **Cài đặt ▸ Nhật ký trình phát** (hoặc nút ⓘ trong player �
 - Nếu cần DV "thật" + Atmos qua Dolby MAT trên Apple TV, có thể cân nhắc thêm backend [AetherEngine](https://github.com/superuser404notfound/AetherEngine) (FFmpeg demux + VideoToolbox + AVPlayer, LGPL) song song với libmpv ở giai đoạn sau.
 - SMB đi qua cầu `xtsmb://` của app (SMBClient, MIT), nên vẫn giữ được MPVKit bản LGPL. NFS chưa hỗ trợ.
 - Trên tvOS, thư viện được lưu trong thư mục Caches (giới hạn của tvOS). Nếu hệ thống dọn bộ nhớ thì quét lại; điểm xem dở sẽ được giữ bền vững khi có đồng bộ Trakt hoặc iCloud.
+- **AirPlay** gửi tệp gốc cho TV (TV tự kéo dữ liệu từ máy bạn qua mạng LAN, không transcode), nên chỉ phát được định dạng AVPlayer hỗ trợ: MP4 / MOV / M4V với H.264 hoặc HEVC (AV1 chỉ trên TV có giải mã AV1). MKV và các định dạng khác: dùng *Phản chiếu màn hình*. Máy và TV phải cùng mạng.
+- **Cập nhật trong app** dựa trên GitHub Releases (tạo bằng tag `v*`). Bản Mac là app sandbox nên không tự thay chính nó: app tải .dmg và mở bộ cài, bạn kéo vào Applications.
 
 ## Lộ trình
 
 - [x] **v0.1**: Khung SwiftUI đa nền tảng, libmpv phát 4K HDR10/DV và TrueHD/DTS, CI build cả 3 nền tảng
 - [x] **v0.2**: macOS DMG, SMB3 và WebDAV, Bonjour, thư viện TMDb, Up Next, chapter, Now Playing, Cài đặt
 - [x] **v0.2.1**: Logo mới, giao diện kiểu Infuse (thanh bên, banner, bảng track/thông tin), sửa co giãn video & toàn màn hình trên Mac, sửa/chẩn đoán âm thanh
+- [x] **v0.2.2**: Stream SMB đa kết nối (hết buffer liên tục với MP4 không xen kẽ), ảnh bìa từ khung hình, AirPlay, kiểm tra & cài bản cập nhật trong app
 - [ ] **v0.3**: Engine AVPlayer cho Dolby Vision và Atmos (Apple TV), song song với libmpv
 - [ ] **v0.4**: OpenSubtitles, scrub thumbnails, Top Shelf
 - [ ] **v0.5**: Trakt.tv sync, iCloud
