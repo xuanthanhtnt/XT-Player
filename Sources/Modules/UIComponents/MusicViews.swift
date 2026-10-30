@@ -37,13 +37,33 @@ struct AlbumCard: View {
 struct AlbumLink: View {
     let item: LibraryItem
     let index: LibraryIndex
+    @Environment(\.modelContext) private var context
 
     var body: some View {
         NavigationLink(value: Route.album(itemKey: item.key)) {
             AlbumCard(item: item, played: index.progress(of: item).watched)
         }
         .tileButtonStyle()
+        .contextMenu {
+            AlbumQueueActions(tracks: { index.files(of: item).sorted(by: LibraryOrdering.episodes) }, album: item, context: context)
+        }
     }
+}
+
+/// Play / Play next / Add to queue for an album or a track (Roon's play menu).
+struct AlbumQueueActions: View {
+    let tracks: () -> [LibraryFile]
+    let album: LibraryItem
+    let context: ModelContext
+
+    var body: some View {
+        Button { MusicPlayer.shared.play(items(), context: context) } label: { Label("Phát", systemImage: "play.fill") }
+        Button { MusicPlayer.shared.play(items(), shuffle: true, context: context) } label: { Label("Trộn bài", systemImage: "shuffle") }
+        Button { MusicPlayer.shared.playNext(items(), context: context) } label: { Label("Phát tiếp", systemImage: "text.line.first.and.arrowtriangle.forward") }
+        Button { MusicPlayer.shared.addToQueue(items(), context: context) } label: { Label("Thêm vào hàng đợi", systemImage: "text.line.last.and.arrowtriangle.forward") }
+    }
+
+    private func items() -> [PlaybackItem] { PlaybackFactory.library(tracks(), item: album, context: context) }
 }
 
 /// 16:9 frame of a music video with its artist / show.
@@ -167,23 +187,35 @@ struct MusicVideosView: View {
 
 /// iPhone / iPad / Apple TV tab: albums and music videos side by side.
 struct MusicLibraryView: View {
-    @State private var showVideos = false
+    enum Page: String, CaseIterable, Identifiable {
+        case albums = "Album", artists = "Nghệ sĩ", videos = "Video ca nhạc"
+        var id: String { rawValue }
+    }
+
+    @State private var page = Page.albums
+    @ObservedObject private var music = MusicPlayer.shared
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Picker("Nhạc", selection: $showVideos) {
-                    Text("Album").tag(false)
-                    Text("Video ca nhạc").tag(true)
+                HStack(spacing: 16) {
+                    Picker("Nhạc", selection: $page) {
+                        ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 480)
+                    #if os(tvOS)
+                    if music.isActive {
+                        Button { music.showsNowPlaying = true } label: { Label("Đang phát", systemImage: "waveform") }
+                    }
+                    #endif
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 420)
                 .padding(.horizontal, Theme.pagePadding)
                 .padding(.top, 12)
-                if showVideos {
-                    MusicVideosView(embedded: true)
-                } else {
-                    AlbumsView(embedded: true)
+                switch page {
+                case .albums: AlbumsView(embedded: true)
+                case .artists: ArtistsView(embedded: true)
+                case .videos: MusicVideosView(embedded: true)
                 }
             }
         }
@@ -214,7 +246,7 @@ struct AlbumDetailView: View {
     let itemKey: String
 
     @Environment(\.modelContext) private var context
-    @Environment(\.play) private var play
+    @ObservedObject private var music = MusicPlayer.shared
     @Query private var matches: [LibraryItem]
     @Query private var files: [LibraryFile]
     @Query private var entries: [MediaEntry]
@@ -243,9 +275,13 @@ struct AlbumDetailView: View {
                             }
                             Button { playAlbum(album, tracks: tracks, from: position) } label: {
                                 TrackRow(number: track.episode ?? position + 1, title: track.episodeTitle ?? track.fileName,
-                                         format: track.badges.first, played: entryByKey[track.key]?.isWatched ?? false)
+                                         format: track.badges.first, duration: entryByKey[track.key]?.duration ?? 0,
+                                         played: entryByKey[track.key]?.isWatched ?? false, playing: music.current?.key == track.key)
                             }
                             .tileButtonStyle()
+                            .contextMenu {
+                                AlbumQueueActions(tracks: { [track] }, album: album, context: context)
+                            }
                             Divider().opacity(0.4)
                         }
                     }
@@ -269,7 +305,23 @@ struct AlbumDetailView: View {
                 Text(summary(album, tracks: tracks)).font(.callout).foregroundStyle(.secondary)
                 HStack(spacing: 12) {
                     Button { playAlbum(album, tracks: tracks, from: 0) } label: { Label("Phát", systemImage: "play.fill") }
-                    Button { playAlbum(album, tracks: tracks.shuffled(), from: 0) } label: { Label("Trộn bài", systemImage: "shuffle") }
+                    Button { music.play(PlaybackFactory.library(tracks, item: album, context: context), shuffle: true, context: context) } label: {
+                        Label("Trộn bài", systemImage: "shuffle")
+                    }
+                    Menu {
+                        Button { music.playNext(PlaybackFactory.library(tracks, item: album, context: context), context: context) } label: {
+                            Label("Phát tiếp", systemImage: "text.line.first.and.arrowtriangle.forward")
+                        }
+                        Button { music.addToQueue(PlaybackFactory.library(tracks, item: album, context: context), context: context) } label: {
+                            Label("Thêm vào hàng đợi", systemImage: "text.line.last.and.arrowtriangle.forward")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                    }
+                    #if os(macOS)
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    #endif
                 }
                 #if !os(tvOS)
                 .buttonStyle(.borderedProminent)
@@ -280,12 +332,19 @@ struct AlbumDetailView: View {
         }
     }
 
+    /// "2024 · 3 bài · 42 phút · FLAC · 96 kHz · 24-bit · 812 MB" (the quality once a track has been played).
     private func summary(_ album: LibraryItem, tracks: [LibraryFile]) -> String {
         var parts: [String] = []
         if let year = album.year { parts.append(String(year)) }
         parts.append("\(tracks.count) bài")
+        let durations = entries.filter { entry in tracks.contains { $0.key == entry.key } }.map(\.duration).filter { $0 > 1 }
+        if durations.count == tracks.count, !durations.isEmpty {
+            let total = durations.reduce(0, +)
+            parts.append(total >= 60 ? "\(Int((total / 60).rounded())) phút" : "\(Int(total)) giây")
+        }
+        let qualities = Array(Set(tracks.compactMap { $0.badges.count > 1 ? $0.badges[1] : nil })).sorted()
         let formats = Array(Set(tracks.compactMap { $0.badges.first })).sorted()
-        if !formats.isEmpty { parts.append(formats.joined(separator: " / ")) }
+        if qualities.count == 1 { parts.append(qualities[0]) } else if !formats.isEmpty { parts.append(formats.joined(separator: " / ")) }
         let bytes = tracks.reduce(Int64(0)) { $0 + $1.size }
         parts.append(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
         return parts.joined(separator: " · ")
@@ -293,8 +352,7 @@ struct AlbumDetailView: View {
 
     private func playAlbum(_ album: LibraryItem, tracks: [LibraryFile], from position: Int) {
         let queue = PlaybackFactory.library(tracks, item: album, context: context)
-        guard !queue.isEmpty else { return }
-        play(PlaybackSession(items: queue, startIndex: min(position, queue.count - 1)))
+        music.play(queue, startAt: position, context: context)
     }
 
     #if os(tvOS)
@@ -308,17 +366,132 @@ private struct TrackRow: View {
     let number: Int
     let title: String
     let format: String?
+    let duration: Double
     let played: Bool
+    let playing: Bool
 
     var body: some View {
         HStack(spacing: 14) {
-            Text("\(number)").font(.callout.monospacedDigit()).foregroundStyle(.secondary).frame(width: 30, alignment: .trailing)
-            Text(title).font(.body).lineLimit(1)
+            Group {
+                if playing {
+                    Image(systemName: "speaker.wave.2.fill").foregroundStyle(Theme.leaf)
+                } else {
+                    Text("\(number)").foregroundStyle(.secondary)
+                }
+            }
+            .font(.callout.monospacedDigit())
+            .frame(width: 30, alignment: .trailing)
+            Text(title).font(.body.weight(playing ? .semibold : .regular)).lineLimit(1)
+                .foregroundStyle(playing ? Theme.leaf : .primary)
             Spacer(minLength: 8)
             if played { Image(systemName: "checkmark").font(.caption.weight(.bold)).foregroundStyle(Theme.leaf) }
             if let format { Text(format).font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+            if duration > 1 { Text(TimeFormat.clock(duration)).font(.callout.monospacedDigit()).foregroundStyle(.secondary).frame(minWidth: 44, alignment: .trailing) }
         }
         .padding(.vertical, 10)
         .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Artists
+
+/// Album artists, each with their albums (Roon's "Nghệ sĩ"): initials when there is no picture.
+struct ArtistsView: View {
+    @Query(sort: \LibraryItem.title) private var allItems: [LibraryItem]
+    var embedded = false
+
+    var body: some View {
+        let artists = Dictionary(grouping: allItems.filter { $0.kind == .album }, by: { $0.artist ?? "Không rõ nghệ sĩ" })
+        let names = artists.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        let grid = VStack(alignment: .leading, spacing: 20) {
+            if names.isEmpty {
+                MusicEmptyHint(kind: .music)
+            } else {
+                Text("\(names.count) nghệ sĩ").font(.callout).foregroundStyle(.secondary)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: AlbumCard.width, maximum: AlbumCard.width * 1.2), spacing: AlbumsView.spacing)],
+                          alignment: .leading, spacing: AlbumsView.spacing) {
+                    ForEach(names, id: \.self) { name in
+                        NavigationLink(value: Route.artist(name: name)) {
+                            ArtistCard(name: name, albums: artists[name] ?? [])
+                        }
+                        .tileButtonStyle()
+                    }
+                }
+            }
+        }
+        .padding(Theme.pagePadding)
+        if embedded {
+            grid
+        } else {
+            ScrollView { grid }.pageTitle("Nghệ sĩ").background(AppBackground())
+        }
+    }
+}
+
+private struct ArtistCard: View {
+    let name: String
+    let albums: [LibraryItem]
+
+    var body: some View {
+        VStack(spacing: 10) {
+            ZStack {
+                Circle().fill(Color.white.opacity(0.07))
+                if let cover = albums.first(where: { ThumbnailStore.isUsable($0.posterPath) })?.posterPath {
+                    ArtworkImage(path: cover, size: "w342", placeholderIcon: "music.mic").clipShape(Circle()).opacity(0.35)
+                }
+                Text(Self.initials(name)).font(.system(size: AlbumCard.width * 0.28, weight: .regular, design: .serif))
+            }
+            .frame(width: AlbumCard.width, height: AlbumCard.width)
+            VStack(spacing: 2) {
+                Text(name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                Text("\(albums.count) album").font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(width: AlbumCard.width)
+        }
+    }
+
+    /// "Ace of Base" → "AB", "Ánh Tuyết" → "ÁT".
+    static func initials(_ name: String) -> String {
+        let words = name.split { !$0.isLetter && !$0.isNumber }.filter { !["of", "the", "và", "and", "&"].contains($0.lowercased()) }
+        let letters = words.prefix(2).compactMap(\.first).map { String($0).uppercased() }
+        return letters.isEmpty ? "♪" : letters.joined()
+    }
+}
+
+/// One artist's albums, newest first.
+struct ArtistDetailView: View {
+    let name: String
+    @Query(sort: \LibraryItem.year, order: .reverse) private var allItems: [LibraryItem]
+    @Query private var files: [LibraryFile]
+    @Query private var entries: [MediaEntry]
+    @Environment(\.modelContext) private var context
+
+    var body: some View {
+        let index = LibraryIndex(files: files, entries: entries)
+        let albums = allItems.filter { $0.kind == .album && ($0.artist ?? "Không rõ nghệ sĩ") == name }
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(spacing: 12) {
+                    Text("\(albums.count) album").font(.callout).foregroundStyle(.secondary)
+                    Button {
+                        let tracks = albums.flatMap { album in
+                            PlaybackFactory.library(index.files(of: album).sorted(by: LibraryOrdering.episodes), item: album, context: context)
+                        }
+                        MusicPlayer.shared.play(tracks, shuffle: true, context: context)
+                    } label: { Label("Trộn tất cả", systemImage: "shuffle") }
+                    #if !os(tvOS)
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.leaf)
+                    #endif
+                }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: AlbumCard.width, maximum: AlbumCard.width * 1.2), spacing: AlbumsView.spacing)],
+                          alignment: .leading, spacing: AlbumsView.spacing) {
+                    ForEach(albums) { AlbumLink(item: $0, index: index) }
+                }
+            }
+            .padding(Theme.pagePadding)
+        }
+        .pageTitle(name)
+        .background(AppBackground())
     }
 }

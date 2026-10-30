@@ -34,8 +34,9 @@ final class NowPlayingController {
         registerCommands()
     }
 
-    func setItem(title: String, subtitle: String?, artworkURL: URL?) {
-        info = [MPMediaItemPropertyTitle: title, MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.video.rawValue]
+    func setItem(title: String, subtitle: String?, artworkURL: URL?, isMusic: Bool = false) {
+        let type: MPNowPlayingInfoMediaType = isMusic ? .audio : .video
+        info = [MPMediaItemPropertyTitle: title, MPNowPlayingInfoPropertyMediaType: type.rawValue]
         if let subtitle { info[MPMediaItemPropertyArtist] = subtitle }
         updatePlayback()
         guard let artworkURL else { return }

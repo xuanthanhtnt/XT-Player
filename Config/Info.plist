@@ -3,6 +3,11 @@
 <plist version="1.0">
 <dict>
 	<!-- Merged with the keys Xcode generates from INFOPLIST_KEY_* build settings. -->
+	<!-- iPhone / iPad / Apple TV: music keeps playing with the screen locked or the app in the background. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_smb._tcp</string>

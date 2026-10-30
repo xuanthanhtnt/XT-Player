@@ -165,6 +165,8 @@ struct BrowserView: View {
         let queue = PlaybackFactory.remote(files: files, subtitles: subtitles, server: server, context: context)
         let index = files.firstIndex(of: item) ?? 0
         guard !queue.isEmpty else { return }
+        // Music plays on in the music player while browsing; videos open full screen.
+        if item.isAudio { return MusicPlayer.shared.play(queue, startAt: index, context: context) }
         play(PlaybackSession(items: queue, startIndex: index))
     }
 

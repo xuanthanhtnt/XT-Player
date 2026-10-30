@@ -86,7 +86,12 @@ struct HomeView: View {
     private var filmsAndShows: [LibraryItem] { items.filter { $0.kind == .movie || $0.kind == .show } }
     private var musicVideos: [LibraryItem] { items.filter { $0.kind == .musicVideo } }
     private var albums: [LibraryItem] { items.filter { $0.kind == .album } }
-    private var continueWatching: [MediaEntry] { Array(entries.filter { $0.resumePosition != nil }.prefix(16)) }
+    /// Films and episodes left half-watched (music is resumed from its album, not from here).
+    private var continueWatching: [MediaEntry] {
+        Array(entries.filter {
+            $0.resumePosition != nil && !FilenameParser.audioExtensions.contains(($0.urlString as NSString).pathExtension.lowercased())
+        }.prefix(16))
+    }
 
     /// In-progress titles first, then the newest additions with artwork.
     private func featuredItems(_ index: LibraryIndex) -> [LibraryItem] {

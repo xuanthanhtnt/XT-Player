@@ -187,6 +187,8 @@ struct PlayerOptions {
     var matchSampleRate = false
     var nightMode = false
     var dialogBoost = false
+    /// Music: ReplayGain / R128 tags level albums and tracks to the same loudness.
+    var volumeLeveling = false
 
     static var standard: PlayerOptions {
         #if os(macOS)
@@ -218,6 +220,7 @@ struct PlayerOptions {
         o.matchSampleRate = d.bool(forKey: AppSettings.matchSampleRate)
         o.nightMode = d.bool(forKey: AppSettings.nightMode)
         o.dialogBoost = d.bool(forKey: AppSettings.dialogBoost)
+        o.volumeLeveling = d.bool(forKey: AppSettings.volumeLeveling)
         return o
     }
 }
@@ -390,6 +393,8 @@ final class MPVPlayerEngine: ObservableObject {
     @Published private(set) var motionSmoothing = false
     /// Frames dropped because decoding or rendering could not keep up (a hint to lower the picture quality).
     @Published private(set) var droppedFrames = 0
+    /// Index of the playing entry of mpv's own playlist (music queue), -1 = none.
+    @Published private(set) var playlistPosition = -1
     @Published private(set) var hdrOutputActive = false
     @Published private(set) var chapters: [Chapter] = []
     @Published private(set) var currentChapter = -1
@@ -414,6 +419,8 @@ final class MPVPlayerEngine: ObservableObject {
     @Published private(set) var audioDevice = "auto"
 
     let options: PlayerOptions
+    /// Music player: no video output; files play from mpv's playlist so tracks join without a gap.
+    let audioOnly: Bool
 
     private let queue = DispatchQueue(label: "xt.mpv.core", qos: .userInitiated)
     private var handle: OpaquePointer?          // queue only
@@ -433,6 +440,7 @@ final class MPVPlayerEngine: ObservableObject {
 
     private var attached = false                // main only
     private var pendingLoad: (location: String, start: Double?, subtitles: [String])?
+    private var pendingPlaylist: (locations: [String], start: Int)?
     private var retainedLayer: MPVMetalLayer?
     private weak var hostView: MPVVideoView?
     private var notificationTokens: [NSObjectProtocol] = []
@@ -440,8 +448,9 @@ final class MPVPlayerEngine: ObservableObject {
     private let displayMatcher = DisplayModeMatcher()
     #endif
 
-    init(options: PlayerOptions = .fromSettings()) {
+    init(options: PlayerOptions = .fromSettings(), audioOnly: Bool = false) {
         self.options = options
+        self.audioOnly = audioOnly
         nightMode = options.nightMode
         dialogBoost = options.dialogBoost
         hardwareDecoding = options.hardwareDecoding
@@ -477,6 +486,20 @@ final class MPVPlayerEngine: ObservableObject {
         if let pending = pendingLoad {
             pendingLoad = nil
             load(pending.location, startAt: pending.start, externalSubtitles: pending.subtitles)
+        }
+    }
+
+    /// Music player: an mpv core without a video surface.
+    func attachAudioOnly() {
+        guard !attached else { return }
+        attached = true
+        #if os(iOS) || os(tvOS)
+        AudioSessionConfigurator.activateForMusic()
+        #endif
+        queue.async { self.createCore(wid: 0, hdr: false, refreshRate: 0) }
+        if let pending = pendingPlaylist {
+            pendingPlaylist = nil
+            loadPlaylist(pending.locations, start: pending.start)
         }
     }
 
@@ -523,6 +546,51 @@ final class MPVPlayerEngine: ObservableObject {
             if let start, start > 0 { args.append("start=\(Int(start))") }
             self.command(args)
         }
+    }
+
+    // MARK: Playlist (music queue)
+
+    /// Replaces mpv's playlist and starts at `start`; the next file is opened ahead of time (prefetch-playlist)
+    /// so it follows the current one without a gap.
+    func loadPlaylist(_ locations: [String], start: Int) {
+        guard attached else {
+            pendingPlaylist = (locations, start)
+            return
+        }
+        state = .loading
+        position = 0
+        duration = 0
+        currentLocation = locations.indices.contains(start) ? locations[start] : ""
+        queue.async {
+            self.command(["stop"])
+            // A core that is still starting up picks its first entry from playlist-start, not from the
+            // playlist-play-index below (the first album of a session would start at track 1).
+            self.command(["set", "playlist-start", "\(start)"])
+            for location in locations { self.command(["loadfile", location, "append"]) }
+            // A queue that ended (keep-open) or was paused stays paused otherwise.
+            self.command(["set", "pause", "no"])
+            self.command(["playlist-play-index", "\(start)"])
+        }
+    }
+
+    func playlistInsertNext(_ location: String) { queue.async { self.command(["loadfile", location, "insert-next"]) } }
+    func playlistAppend(_ location: String) { queue.async { self.command(["loadfile", location, "append"]) } }
+    func playlistRemove(_ index: Int) { queue.async { self.command(["playlist-remove", "\(index)"]) } }
+    /// Moves the entry at `from` so that it takes the place of the entry at `to` (mpv's playlist-move).
+    func playlistMove(_ from: Int, to: Int) { queue.async { self.command(["playlist-move", "\(from)", "\(to)"]) } }
+    func playlistPlay(_ index: Int) {
+        queue.async {
+            self.command(["set", "pause", "no"])
+            self.command(["playlist-play-index", "\(index)"])
+        }
+    }
+    func playlistNext() { queue.async { self.command(["playlist-next"]) } }
+    func playlistPrevious() { queue.async { self.command(["playlist-prev"]) } }
+
+    /// Repeat: the whole queue, one track, or off.
+    func setLoop(playlist: Bool, file: Bool) {
+        setProperty("loop-playlist", playlist ? "inf" : "no")
+        setProperty("loop-file", file ? "inf" : "no")
     }
 
     func togglePause() { queue.async { self.command(["cycle", "pause"]) } }
@@ -708,8 +776,10 @@ final class MPVPlayerEngine: ObservableObject {
         // Info-level log lines (AO/VO selection, warnings, errors) are always kept for the Info panel.
         mpv_request_log_messages(mpv, "info")
 
-        var windowID = wid
-        mpv_set_option(mpv, "wid", MPV_FORMAT_INT64, &windowID)
+        if wid != 0 {
+            var windowID = wid
+            mpv_set_option(mpv, "wid", MPV_FORMAT_INT64, &windowID)
+        }
 
         var settings: [(String, String)] = [
             // Video: Vulkan → MoltenVK → Metal, VideoToolbox decode, libplacebo rendering.
@@ -763,6 +833,15 @@ final class MPVPlayerEngine: ObservableObject {
             ("load-scripts", "no"),
             ("ytdl", "no"),
         ]
+        if audioOnly {
+            // Music: nothing to show (the app draws the cover), files decoded back to back from mpv's playlist.
+            settings = settings.filter { !["vo", "gpu-api", "gpu-context", "hwdec", "target-colorspace-hint"].contains($0.0) }
+            settings += [("vo", "null"), ("vid", "no"), ("gapless-audio", "yes"), ("prefetch-playlist", "yes")]
+        }
+        if options.volumeLeveling {
+            // Album gain keeps the loudness differences inside an album; never push peaks into clipping.
+            settings += [("replaygain", "album"), ("replaygain-clip", "no"), ("replaygain-fallback", "0")]
+        }
         if !options.audioLanguages.isEmpty { settings.append(("alang", options.audioLanguages)) }
         // When the output cannot run at the file's rate, resample with a longer filter than libswresample's
         // default (32 taps, 2^12 phases): less aliasing and passband ripple for hi-res sources.
@@ -850,6 +929,7 @@ final class MPVPlayerEngine: ObservableObject {
             ("audio-params/samplerate", MPV_FORMAT_INT64),
             ("chapter-list/count", MPV_FORMAT_INT64),
             ("chapter", MPV_FORMAT_INT64),
+            ("playlist-pos", MPV_FORMAT_INT64),
             ("speed", MPV_FORMAT_DOUBLE),
             ("audio-delay", MPV_FORMAT_DOUBLE),
             ("sub-scale", MPV_FORMAT_DOUBLE),
@@ -1034,6 +1114,9 @@ final class MPVPlayerEngine: ObservableObject {
             publish { $0.audio.sampleFormat = v }
         case "chapter-list/count":
             refreshChapters(mpv)
+        case "playlist-pos":
+            let v = available ? int() : -1
+            publish { $0.playlistPosition = v }
         case "chapter":
             let v = available ? int() : -1
             publish { $0.currentChapter = v }

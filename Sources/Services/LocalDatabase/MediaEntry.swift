@@ -77,6 +77,17 @@ enum MediaLibrary {
         if changed { try? context.save() }
     }
 
+    /// What a track turned out to be when played ("FLAC · 96 kHz · 24-bit"), kept as the file's second badge.
+    static func learnTrack(fileKey: String, quality: String, in context: ModelContext) {
+        var fileQuery = FetchDescriptor<LibraryFile>(predicate: #Predicate { $0.key == fileKey })
+        fileQuery.fetchLimit = 1
+        guard let file = try? context.fetch(fileQuery).first else { return }
+        let format = file.badges.first ?? quality
+        guard file.badges.count < 2 || file.badges[1] != quality else { return }
+        file.badges = [format, quality]
+        try? context.save()
+    }
+
     static func entry(forKey key: String, in context: ModelContext) -> MediaEntry? {
         var descriptor = FetchDescriptor<MediaEntry>(predicate: #Predicate { $0.key == key })
         descriptor.fetchLimit = 1

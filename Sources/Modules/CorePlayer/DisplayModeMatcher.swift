@@ -91,6 +91,23 @@ enum AudioSessionConfigurator {
         }
     }
 
+    /// Music: keeps playing in the background and with the screen locked (UIBackgroundModes audio).
+    static func activateForMusic() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            #if os(iOS)
+            try session.setCategory(.playback, mode: .default, policy: .longFormAudio, options: [])
+            #else
+            try session.setCategory(.playback, mode: .default, options: [])
+            #endif
+            try session.setActive(true)
+        } catch {
+            #if DEBUG
+            print("[XT-Player] audio session (music): \(error)")
+            #endif
+        }
+    }
+
     static func deactivate() {
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }

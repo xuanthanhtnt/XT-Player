@@ -24,6 +24,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.matchSampleRate) private var matchSampleRate = false
     @AppStorage(AppSettings.nightMode) private var nightMode = false
     @AppStorage(AppSettings.dialogBoost) private var dialogBoost = false
+    @AppStorage(AppSettings.volumeLeveling) private var volumeLeveling = false
     @State private var tmdbKey = ""
     @State private var openSubtitlesKey = ""
     @State private var openSubtitlesPassword = ""
@@ -73,6 +74,7 @@ struct SettingsView: View {
                     .autocorrectionDisabled()
                 Toggle("Tăng thoại (nghe rõ lời nói)", isOn: $dialogBoost)
                 Toggle("Chế độ ban đêm (nén dải động)", isOn: $nightMode)
+                Toggle("Cân bằng âm lượng nhạc (ReplayGain)", isOn: $volumeLeveling)
                 #if os(macOS)
                 Toggle("Khớp tần số lấy mẫu với DAC / loa ngoài", isOn: $matchSampleRate)
                 Toggle("Bitstream TrueHD / DTS-HD / E-AC3 qua HDMI", isOn: $audioPassthrough)
@@ -82,7 +84,7 @@ struct SettingsView: View {
                 Text("Âm thanh")
             } footer: {
                 #if os(macOS)
-                Text("Tăng thoại: kênh giữa to hơn, kênh vòm và siêu trầm nhỏ lại (stereo: tách dải giọng nói). Ban đêm: nén dải động — tiếng nói nhỏ được nâng lên, tiếng nổ được giữ lại — cộng thông tin nén có sẵn trong âm thanh Dolby. Khớp tần số: đổi tần số của thiết bị theo file (44,1 / 48 / 96 / 192 kHz), không để macOS lấy mẫu lại — bật khi dùng DAC hoặc loa ngoài để nghe hi-res đúng gốc (bảng Thông tin trong trình phát cho biết có lấy mẫu lại hay không). Bitstream: gửi nguyên AC3 / E-AC3 / DTS (và TrueHD / DTS-HD MA nếu cổng HDMI của Mac nhận) cho ampli giải mã; thiết bị không nhận thì app tự giải mã lossless thành PCM.")
+                Text("Tăng thoại: kênh giữa to hơn, kênh vòm và siêu trầm nhỏ lại (stereo: tách dải giọng nói). Ban đêm: nén dải động — tiếng nói nhỏ được nâng lên, tiếng nổ được giữ lại — cộng thông tin nén có sẵn trong âm thanh Dolby. Khớp tần số: đổi tần số của thiết bị theo file (44,1 / 48 / 96 / 192 kHz), không để macOS lấy mẫu lại — bật khi dùng DAC hoặc loa ngoài để nghe hi-res đúng gốc (bảng Thông tin trong trình phát cho biết có lấy mẫu lại hay không). Cân bằng âm lượng: dùng thẻ ReplayGain trong file để các album to nhỏ như nhau (giữ chênh lệch giữa các bài trong album). Bitstream: gửi nguyên AC3 / E-AC3 / DTS (và TrueHD / DTS-HD MA nếu cổng HDMI của Mac nhận) cho ampli giải mã; thiết bị không nhận thì app tự giải mã lossless thành PCM.")
                 #else
                 Text("Tăng thoại: kênh giữa to hơn, kênh vòm và siêu trầm nhỏ lại (stereo: tách dải giọng nói). Ban đêm: nén dải động — tiếng nói nhỏ được nâng lên, tiếng nổ được giữ lại. Âm thanh hi-res (44,1–192 kHz) phát đúng tần số gốc khi cắm DAC USB / Lightning.")
                 #endif

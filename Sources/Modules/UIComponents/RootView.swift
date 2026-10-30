@@ -7,6 +7,7 @@ enum Route: Hashable {
     case grid(kind: String)
     case detail(itemKey: String)
     case album(itemKey: String)
+    case artist(name: String)
     case browser(serverID: String, path: String, title: String)
     case addServer
     case settings
@@ -17,7 +18,7 @@ enum Route: Hashable {
 enum AppSection: Hashable {
     case home, movies, shows, sources, settings
     case search, recent, unwatched, topRated, genres
-    case musicVideos, music
+    case musicVideos, music, artists
     case server(String), folder(String)
 }
 
@@ -62,6 +63,7 @@ struct RootView: View {
     @State private var showURLSheet = false
     @State private var errorMessage: String?
     @StateObject private var scanner = LibraryScanner()
+    @ObservedObject private var music = MusicPlayer.shared
     #if os(macOS)
     @Query(sort: \MediaServer.createdAt) private var servers: [MediaServer]
     @Query(sort: \LibraryFolder.name) private var folders: [LibraryFolder]
@@ -80,7 +82,8 @@ struct RootView: View {
             .environmentObject(scanner)
             // A file just played may have no picture yet (opened from a share or from this device).
             .onChange(of: session == nil) { _, closed in
-                guard closed else { return }
+                // A video takes over: the music pauses and lends it the remote / lock-screen controls.
+                guard closed else { return music.suspendForVideo() }
                 Task {
                     await scanner.generateMissingArtwork(context: context)
                     // Give Trakt a moment to file the stop scrobble, then pull what changed meanwhile.
@@ -110,7 +113,7 @@ struct RootView: View {
                 switch result {
                 case let .success(urls):
                     if let url = urls.first {
-                        session = PlaybackSession(item: PlaybackFactory.local(MediaSource.pickedFile(url), context: context))
+                        open(PlaybackFactory.local(MediaSource.pickedFile(url), context: context))
                     }
                 case let .failure(error):
                     errorMessage = error.localizedDescription
@@ -122,7 +125,7 @@ struct RootView: View {
             .sheet(isPresented: $showURLSheet) {
                 OpenURLSheet { source in
                     showURLSheet = false
-                    session = PlaybackSession(item: PlaybackFactory.local(source, context: context))
+                    open(PlaybackFactory.local(source, context: context))
                 }
             }
             .alert("Không mở được", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
@@ -149,11 +152,16 @@ struct RootView: View {
                        minHeight: frozen == nil ? nil : 0, maxHeight: frozen == nil ? nil : .infinity)
                 .opacity(session == nil ? 1 : 0)
                 .allowsHitTesting(session == nil)
+            if music.showsNowPlaying && session == nil {
+                MusicNowPlayingView()
+                    .transition(.move(edge: .bottom))
+            }
             if let session {
                 PlayerScreen(session: session) { self.session = nil }
                     .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.25), value: music.showsNowPlaying)
         .onChange(of: session?.id) { _, id in
             if id == nil {
                 frozenLibrarySize = nil
@@ -166,6 +174,7 @@ struct RootView: View {
         // .toolbar(.hidden, for: .windowToolbar) would take the close / minimise / zoom buttons with it.
         #else
         sections
+            .fullScreenCover(isPresented: $music.showsNowPlaying) { MusicNowPlayingView() }
             .fullScreenCover(item: $session) { current in
                 PlayerScreen(session: current) { session = nil }
             }
@@ -179,6 +188,16 @@ struct RootView: View {
     /// A split view rather than a sidebar TabView: a TabView cannot pin a tab to the bottom of its sidebar
     /// (a tab hidden from the list shows an empty page). Each section remembers where it was navigated to.
     private var sections: some View {
+        // The music bar runs under sidebar and content alike (as in Roon); the split view shrinks above it, so
+        // the sidebar's Settings row stays visible.
+        VStack(spacing: 0) {
+            librarySplitView
+            MiniPlayerBar()
+        }
+        .animation(.easeInOut(duration: 0.25), value: music.isActive)
+    }
+
+    private var librarySplitView: some View {
         NavigationSplitView {
             List(selection: sidebarSelection) {
                 sidebarRow("Tìm kiếm", "magnifyingglass", .search)
@@ -193,6 +212,7 @@ struct RootView: View {
                 }
                 Section("Âm nhạc") {
                     sidebarRow("Nhạc", "music.note.list", .music)
+                    sidebarRow("Nghệ sĩ", "music.mic", .artists)
                     sidebarRow("Video ca nhạc", "music.note.tv", .musicVideos)
                 }
                 Section("Tệp") {
@@ -248,6 +268,7 @@ struct RootView: View {
         case .genres: GenresView()
         case .music: AlbumsView()
         case .musicVideos: MusicVideosView()
+        case .artists: ArtistsView()
         case .sources: SourcesView()
         case .settings: SettingsView()
         case let .server(id):
@@ -264,27 +285,36 @@ struct RootView: View {
     private var sections: some View {
         TabView(selection: $section) {
             Tab("Trang chủ", systemImage: "house.fill", value: AppSection.home) {
-                NavigationStack { HomeView().libraryRoutes() }
+                NavigationStack { HomeView().libraryRoutes() }.musicBar()
             }
             Tab("Phim", systemImage: "film.fill", value: AppSection.movies) {
-                NavigationStack { LibraryGridView(kind: .movie).libraryRoutes() }
+                NavigationStack { LibraryGridView(kind: .movie).libraryRoutes() }.musicBar()
             }
             Tab("TV Shows", systemImage: "tv.fill", value: AppSection.shows) {
-                NavigationStack { LibraryGridView(kind: .show).libraryRoutes() }
+                NavigationStack { LibraryGridView(kind: .show).libraryRoutes() }.musicBar()
             }
             Tab("Nhạc", systemImage: "music.note", value: AppSection.music) {
-                NavigationStack { MusicLibraryView().libraryRoutes() }
+                NavigationStack { MusicLibraryView().libraryRoutes() }.musicBar()
             }
             Tab("Nguồn", systemImage: "externaldrive.connected.to.line.below.fill", value: AppSection.sources) {
-                NavigationStack { SourcesView().libraryRoutes() }
+                NavigationStack { SourcesView().libraryRoutes() }.musicBar()
             }
             Tab("Cài đặt", systemImage: "gearshape.fill", value: AppSection.settings) {
-                NavigationStack { SettingsView().libraryRoutes() }
+                NavigationStack { SettingsView().libraryRoutes() }.musicBar()
             }
         }
         .tabViewStyle(.sidebarAdaptable)
     }
     #endif
+
+    /// Opened from a file picker or a URL: music plays in the music player, anything else full screen.
+    private func open(_ item: PlaybackItem) {
+        if FilenameParser.audioExtensions.contains((item.source.displayName as NSString).pathExtension.lowercased()) {
+            music.play([item], context: context)
+        } else {
+            session = PlaybackSession(item: item)
+        }
+    }
 
     static let playableTypes: [UTType] = {
         var types: [UTType] = [.movie, .video, .audiovisualContent, .mpeg4Movie, .quickTimeMovie, .mpeg2TransportStream, .avi, .audio]
@@ -341,6 +371,8 @@ private struct LibraryRoutes: ViewModifier {
                 MediaDetailView(itemKey: itemKey)
             case let .album(itemKey):
                 AlbumDetailView(itemKey: itemKey)
+            case let .artist(name):
+                ArtistDetailView(name: name)
             case let .browser(serverID, path, title):
                 BrowserView(serverID: serverID, path: path, title: title)
             case .addServer:
@@ -354,4 +386,14 @@ private struct LibraryRoutes: ViewModifier {
 
 extension View {
     func libraryRoutes() -> some View { modifier(LibraryRoutes()) }
+
+    /// iPhone / iPad: the music bar above the tab bar while music plays (the Mac shows it across the window).
+    @ViewBuilder
+    func musicBar() -> some View {
+        #if os(iOS)
+        safeAreaInset(edge: .bottom, spacing: 0) { MiniPlayerBar() }
+        #else
+        self
+        #endif
+    }
 }

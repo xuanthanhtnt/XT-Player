@@ -23,6 +23,7 @@ enum AppSettings {
     static let matchSampleRate = "audio.matchSampleRate"
     static let nightMode = "audio.nightMode"
     static let dialogBoost = "audio.dialogBoost"
+    static let volumeLeveling = "audio.volumeLeveling"
 
     static func registerDefaults() {
         #if os(macOS)
@@ -50,6 +51,7 @@ enum AppSettings {
             matchSampleRate: false,
             nightMode: false,
             dialogBoost: false,
+            volumeLeveling: false,
         ])
     }
 
