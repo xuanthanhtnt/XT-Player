@@ -177,21 +177,45 @@ final class LibraryScanner: ObservableObject {
             try? context.save()
         }
 
-        // Continue Watching entries opened straight from a share (not part of the library).
-        for entry in entries.values where entry.artworkPath == nil && entry.urlString.hasPrefix("xtsmb:") {
-            guard let serverID = entry.serverID, let server = servers[serverID] else { continue }
+        // Continue Watching entries that are not library files: opened from a share, from WebDAV, or a file on
+        // this device (read through its security-scoped bookmark).
+        for entry in entries.values where entry.artworkPath == nil {
+            guard let source = Self.grabSource(for: entry, servers: servers) else { continue }
             let reference = ThumbnailStore.reference(forKey: entry.key)
             guard let output = ThumbnailStore.url(for: reference) else { continue }
             if !FileManager.default.fileExists(atPath: output.path) {
-                RemoteCredentialStore.shared.register(server)
-                let location = entry.urlString
-                guard await Task.detached(priority: .utility, operation: { FrameGrabber.grab(location, to: output) }).value != nil
-                else { continue }
+                let scoped = source.scoped?.startAccessingSecurityScopedResource() ?? false
+                let location = source.location
+                let probe = await Task.detached(priority: .utility, operation: { FrameGrabber.grab(location, to: output) }).value
+                if scoped { source.scoped?.stopAccessingSecurityScopedResource() }
+                guard probe != nil else { continue }
             }
             entry.artworkPath = reference
             try? context.save()
         }
         status = previousStatus
+    }
+
+    /// Where mpv can read a Continue Watching entry from, and the security-scoped URL to unlock for local files.
+    private static func grabSource(for entry: MediaEntry, servers: [String: ServerCredentials]) -> (location: String, scoped: URL?)? {
+        if entry.urlString.hasPrefix("xtsmb:") {
+            guard let id = entry.serverID, let server = servers[id] else { return nil }
+            RemoteCredentialStore.shared.register(server)
+            return (entry.urlString, nil)
+        }
+        if entry.isLocalFile {
+            if let bookmark = entry.bookmark, let source = MediaSource.restore(urlString: entry.urlString, bookmark: bookmark),
+               source.url.isFileURL {
+                return (source.url.path, source.url)
+            }
+            return FileManager.default.isReadableFile(atPath: entry.urlString) ? (entry.urlString, nil) : nil
+        }
+        // WebDAV: the stored URL has no credentials; rebuild the playback URL from the server.
+        if let id = entry.serverID, let server = servers[id], server.kind == .webdav, let url = URL(string: entry.urlString),
+           let playback = RemoteFileSystems.playbackURL(server: server, path: url.path) {
+            return (playback.absoluteString, nil)
+        }
+        return nil
     }
 
     /// Re-fetch TMDb metadata for one item (e.g. after a wrong match or adding a key).

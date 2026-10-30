@@ -73,6 +73,10 @@ struct RootView: View {
             .environment(\.play, PlayAction { session = $0 })
             .environment(\.openSection, { section = $0 })
             .environmentObject(scanner)
+            // A file just played may have no picture yet (opened from a share or from this device).
+            .onChange(of: session == nil) { _, closed in
+                if closed { Task { await scanner.generateMissingArtwork(context: context) } }
+            }
             .task {
                 await TraktService.shared.sync(context: context)
                 await scanner.generateMissingArtwork(context: context)
