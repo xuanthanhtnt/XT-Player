@@ -66,6 +66,22 @@ final class BrowserThumbnails: ObservableObject {
     }
 }
 
+/// Music rows in the NAS browser: same footprint as a video thumbnail.
+struct BrowserAudioIcon: View {
+    var body: some View {
+        ZStack {
+            Color.white.opacity(0.06)
+            Image(systemName: "music.note").font(.title3).foregroundStyle(Theme.leaf)
+        }
+        #if os(tvOS)
+        .frame(width: 192, height: 108)
+        #else
+        .frame(width: 112, height: 63)
+        #endif
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+}
+
 /// The thumbnail at the start of a video row in the NAS browser.
 struct BrowserThumbnail: View {
     @ObservedObject private var thumbnails = BrowserThumbnails.shared

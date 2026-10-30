@@ -42,9 +42,18 @@ struct ParsedMediaName: Equatable {
 enum FilenameParser {
     static let videoExtensions: Set<String> = [
         "mkv", "mp4", "m4v", "mov", "avi", "wmv", "ts", "m2ts", "mts", "webm", "flv", "iso", "mpg", "mpeg", "vob", "ogm", "rmvb",
+        "3gp", "3g2", "asf", "divx", "f4v", "m2v", "mxf", "nut", "ivf", "wtv", "rm", "dv", "vvc", "266",
     ]
 
-    static let subtitleExtensions: Set<String> = ["srt", "ass", "ssa", "vtt", "sub", "sup", "idx", "smi"]
+    /// Music and audio-only tracks: lossless and hi-res (FLAC, ALAC, WAV / AIFF / Wave64, DSD, WavPack, APE, TTA,
+    /// TAK), lossy, and raw Blu-ray / DVD-Audio tracks (DTS-HD, TrueHD, MLP).
+    static let audioExtensions: Set<String> = [
+        "flac", "m4a", "alac", "wav", "aif", "aiff", "aifc", "caf", "w64", "dsf", "dff", "wv", "ape", "tta", "tak",
+        "mp3", "aac", "ogg", "oga", "opus", "wma", "mpc", "shn", "mka", "mp2",
+        "ac3", "eac3", "ec3", "dts", "dtshd", "thd", "truehd", "mlp",
+    ]
+
+    static let subtitleExtensions: Set<String> = ["srt", "ass", "ssa", "vtt", "sub", "sup", "idx", "smi", "sami", "rt", "pjs", "stl", "jss", "mpl", "lrc"]
 
     static func parse(_ rawName: String) -> ParsedMediaName {
         var name = rawName

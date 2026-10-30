@@ -277,7 +277,8 @@ struct RootView: View {
 
     static let playableTypes: [UTType] = {
         var types: [UTType] = [.movie, .video, .audiovisualContent, .mpeg4Movie, .quickTimeMovie, .mpeg2TransportStream, .avi, .audio]
-        for ext in ["mkv", "mka", "webm", "m2ts", "mts", "ts", "wmv", "flv", "vob", "iso", "rmvb", "ogm", "mpg", "mpeg"] {
+        let extensions = FilenameParser.videoExtensions.union(FilenameParser.audioExtensions).sorted()
+        for ext in extensions {
             if let type = UTType(filenameExtension: ext), !types.contains(type) { types.append(type) }
         }
         return types

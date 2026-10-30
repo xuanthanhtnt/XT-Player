@@ -13,6 +13,9 @@ struct RemoteItem: Identifiable, Hashable {
 
     var fileExtension: String { (name as NSString).pathExtension.lowercased() }
     var isVideo: Bool { !isDirectory && FilenameParser.videoExtensions.contains(fileExtension) }
+    var isAudio: Bool { !isDirectory && FilenameParser.audioExtensions.contains(fileExtension) }
+    /// Shown and played in the folder browser (the library only collects videos).
+    var isPlayable: Bool { isVideo || isAudio }
     var isSubtitle: Bool { !isDirectory && FilenameParser.subtitleExtensions.contains(fileExtension) }
     var baseName: String { (name as NSString).deletingPathExtension }
 }

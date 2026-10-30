@@ -13,7 +13,7 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "0.2.8"
+    MARKETING_VERSION: "0.2.9"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
     PRODUCT_NAME: XTPlayer
@@ -44,10 +44,9 @@ settings:
 
 packages:
   MPVKit:
-    # libmpv 0.41 + FFmpeg 9.0.2 prebuilt for iOS / tvOS / macOS (MoltenVK, libplacebo, libass, libdovi).
-    # Switch the product below to "MPVKit-GPL" to get native smb:// playback inside mpv (GPL licence).
-    url: https://github.com/mpvkit/MPVKit
-    exactVersion: 1.1.0-n9.0.2
+    # libmpv 0.41 + FFmpeg 9.0.2 for iOS / tvOS / macOS (MoltenVK, libplacebo, libass, libdovi): MPVKit's release
+    # binaries, with FFmpeg rebuilt by XT-Player for more formats and S/PDIF bitstreaming (Packages/MPVKit/README.md).
+    path: Packages/MPVKit
   SMBClient:
     # Pure-Swift SMB2/3 over Network.framework (MIT) — browsing + streaming into mpv via xtsmb://.
     url: https://github.com/kishikawakatsumi/SMBClient

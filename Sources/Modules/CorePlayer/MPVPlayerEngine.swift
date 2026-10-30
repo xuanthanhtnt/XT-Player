@@ -94,8 +94,23 @@ struct MediaTrack: Identifiable, Hashable {
     }
 
     static func prettyCodec(_ codec: String) -> String {
-        switch codec.lowercased() {
-        case "truehd", "mlp": return "TrueHD"
+        let lower = codec.lowercased()
+        if lower.hasPrefix("pcm_") { return "PCM" }
+        if lower.hasPrefix("dsd_") { return "DSD" }
+        switch lower {
+        case "truehd": return "TrueHD"
+        case "mlp": return "MLP"
+        case "dst": return "DSD (DST)"
+        case "wavpack": return "WavPack"
+        case "alac": return "ALAC"
+        case "ape": return "APE"
+        case "tta": return "TTA"
+        case "tak": return "TAK"
+        case "mpc7", "mpc8": return "Musepack"
+        case "vorbis": return "Vorbis"
+        case "mp3", "mp3float": return "MP3"
+        case "vvc": return "H.266"
+        case "vp9": return "VP9"
         case "dts": return "DTS"
         case "eac3": return "DD+"
         case "ac3": return "AC3"
@@ -130,6 +145,20 @@ struct AudioSignal: Equatable {
     var channels = 0
     var sampleRate = 0
     var outputChannels = 0
+    /// Rate mpv hands the audio output (after its own resampling, if any).
+    var outputSampleRate = 0
+    /// Rate the output device itself runs at (the system mixer resamples to it when it differs).
+    var deviceSampleRate = 0.0
+    /// Decoded sample format ("s32" for 24-bit FLAC / TrueHD / DTS-HD MA, "floatp" for lossy codecs).
+    var sampleFormat = ""
+
+    /// Above CD / DVD rate (88.2 kHz and up).
+    var isHighResolution: Bool { sampleRate > 48_000 }
+
+    /// Reaches the device at the file's own rate: no resampling by mpv or by the system mixer.
+    var isNativeRate: Bool {
+        sampleRate > 0 && outputSampleRate == sampleRate && (deviceSampleRate <= 0 || abs(deviceSampleRate - Double(sampleRate)) < 1)
+    }
 }
 
 struct PlayerOptions {
@@ -242,34 +271,36 @@ enum PictureQuality: String, CaseIterable, Identifiable {
     }
 }
 
-/// Night mode and dialogue boost as an FFmpeg filter chain. MPVKit's FFmpeg has no compressor filters
-/// (dynaudnorm, acompressor, loudnorm), so dynamics come from the AC-3 / E-AC-3 decoder's own DRC metadata
-/// and the rest is remixing: centre (dialogue) up, LFE and surrounds down.
+/// Night mode and dialogue boost as an FFmpeg filter chain (filters enabled in XT-Player's FFmpeg build,
+/// see Packages/MPVKit). Night mode also turns on the AC-3 / E-AC-3 decoder's own DRC metadata.
 enum AudioEnhancement {
     static func filter(night: Bool, dialog: Bool, source: Int, output: Int) -> String {
         guard night || dialog, source > 0, output > 0 else { return "" }
+        var chain: [String] = []
         if source <= 2 {
-            // Stereo has no centre channel: raise what both sides share (mid) against what differs (side).
-            return dialog && source == 2 ? "lavfi=[pan=stereo|c0<1.4*c0+0.4*c1|c1<0.4*c0+1.4*c1]" : ""
-        }
-        let centre = dialog ? 1.2 : 1.0
-        let surround = dialog ? 0.35 : 0.5
-        if output <= 2 {
+            // Stereo has no centre channel: dialoguenhance pulls the voice band out of what both sides share.
+            if dialog, source == 2 { chain.append("dialoguenhance=original=1:enhance=1.5:voice=3") }
+        } else if output <= 2 {
             // Speakers / headphones: a dialogue-first downmix instead of the standard -3 dB centre.
-            return String(format: "lavfi=[aresample=out_chlayout=stereo:clev=%.2f:slev=%.2f:lfe_mix_level=0]", centre, surround)
+            let centre = dialog ? 1.2 : 1.0, surround = dialog ? 0.35 : 0.5
+            chain.append(String(format: "aresample=out_chlayout=stereo:clev=%.2f:slev=%.2f:lfe_mix_level=0", centre, surround))
+        } else {
+            // Receiver / TV: keep the layout, lower everything around the centre channel.
+            let wide = source >= 8 && output >= 8
+            let side = dialog ? 0.6 : 0.75, front = dialog ? 0.7 : 1.0
+            var gains = [
+                String(format: "FL=%.2f*FL", front), String(format: "FR=%.2f*FR", front), "FC=FC",
+                String(format: "LFE=%.2f*LFE", night ? 0.5 : 0.7),
+                String(format: "BL=%.2f*BL", side), String(format: "BR=%.2f*BR", side),
+            ]
+            if wide { gains += [String(format: "SL=%.2f*SL", side), String(format: "SR=%.2f*SR", side)] }
+            let layout = wide ? "7.1" : "5.1"
+            chain.append("aresample=out_chlayout=\(layout)")
+            chain.append("pan=\(layout)|\(gains.joined(separator: "|"))")
         }
-        // Receiver / TV: keep the layout, lower everything around the centre channel.
-        let wide = source >= 8 && output >= 8
-        let side = dialog ? 0.6 : 0.75
-        let front = dialog ? 0.7 : 1.0
-        var gains = [
-            String(format: "FL=%.2f*FL", front), String(format: "FR=%.2f*FR", front), "FC=FC",
-            String(format: "LFE=%.2f*LFE", night ? 0.5 : 0.7),
-            String(format: "BL=%.2f*BL", side), String(format: "BR=%.2f*BR", side),
-        ]
-        if wide { gains += [String(format: "SL=%.2f*SL", side), String(format: "SR=%.2f*SR", side)] }
-        let layout = wide ? "7.1" : "5.1"
-        return "lavfi=[aresample=out_chlayout=\(layout),pan=\(layout)|\(gains.joined(separator: "|"))]"
+        // Night: raise quiet passages and hold back explosions, frame by frame (peaks capped at 0.6).
+        if night { chain.append("dynaudnorm=f=250:g=31:p=0.6:m=8") }
+        return chain.isEmpty ? "" : "lavfi=[\(chain.joined(separator: ","))]"
     }
 }
 
@@ -371,6 +402,10 @@ final class MPVPlayerEngine: ObservableObject {
 
     /// Bitstreaming to a receiver: the volume is the receiver's, not the app's or the system's.
     var isBitstreaming: Bool { audioOutput == "coreaudio_exclusive" }
+
+    /// mpv bitstreams through libavformat's spdif muxer (enabled in XT-Player's FFmpeg build; upstream MPVKit
+    /// leaves it out, and ad_spdif then fails with "libavformat spdif initialization failed").
+    static let bitstreamSupported = true
     @Published private(set) var videoBitrate: Double = 0
     @Published private(set) var audioBitrate: Double = 0
     @Published private(set) var volume: Double = 100
@@ -555,6 +590,21 @@ final class MPVPlayerEngine: ObservableObject {
         setProperty("audio-device", name)
     }
 
+    /// iPhone / iPad / Apple TV: ask the audio session for the file's sample rate. A USB or Lightning DAC (and
+    /// a receiver taking 44.1 kHz) then plays 44.1 / 88.2 / 96 / 192 kHz natively instead of everything being
+    /// resampled to 48 kHz; outputs with a fixed rate keep theirs. mpv reopens its output at the new rate.
+    fileprivate func followSourceSampleRate(_ rate: Int) {
+        #if os(iOS) || os(tvOS)
+        guard rate > 0 else { return }
+        let session = AVAudioSession.sharedInstance()
+        guard abs(session.sampleRate - Double(rate)) >= 1 else { return }
+        try? session.setPreferredSampleRate(Double(rate))
+        if abs(session.sampleRate - Double(rate)) < 1 {
+            queue.async { self.command(["ao-reload"]) }
+        }
+        #endif
+    }
+
     func refreshAudioDevices() {
         queue.async {
             guard let mpv = self.handle else { return }
@@ -714,6 +764,10 @@ final class MPVPlayerEngine: ObservableObject {
             ("ytdl", "no"),
         ]
         if !options.audioLanguages.isEmpty { settings.append(("alang", options.audioLanguages)) }
+        // When the output cannot run at the file's rate, resample with a longer filter than libswresample's
+        // default (32 taps, 2^12 phases): less aliasing and passband ripple for hi-res sources.
+        settings.append(("audio-resample-filter-size", "32"))
+        settings.append(("audio-resample-phase-shift", "12"))
         // The embedded Metal surface gives mpv no refresh rate; display-resample needs it.
         if refreshRate > 0 { settings.append(("display-fps-override", String(format: "%.3f", refreshRate))) }
         if options.motionSmoothing { settings += Self.motionOptions(true) }
@@ -726,7 +780,7 @@ final class MPVPlayerEngine: ObservableObject {
         settings.append(("ao", "coreaudio,avfoundation,"))
         // The system mixer's layout: stereo speakers get a proper downmix, multichannel devices get more.
         settings.append(("audio-channels", "auto-safe"))
-        if options.audioPassthrough {
+        if options.audioPassthrough, Self.bitstreamSupported {
             // No audio-exclusive: mpv's CoreAudio output takes exclusive (hog) mode by itself only while it
             // bitstreams, and outputs without a digital format (built-in speakers, headphones) fall back to
             // decoded PCM on the shared mixer, so the system volume keeps working for everything else.
@@ -789,6 +843,8 @@ final class MPVPlayerEngine: ObservableObject {
             ("audio-bitrate", MPV_FORMAT_DOUBLE),
             ("audio-params/channel-count", MPV_FORMAT_INT64),
             ("audio-out-params/channel-count", MPV_FORMAT_INT64),
+            ("audio-out-params/samplerate", MPV_FORMAT_INT64),
+            ("audio-params/format", MPV_FORMAT_STRING),
             ("frame-drop-count", MPV_FORMAT_INT64),
             ("vo-drop-frame-count", MPV_FORMAT_INT64),
             ("audio-params/samplerate", MPV_FORMAT_INT64),
@@ -963,7 +1019,19 @@ final class MPVPlayerEngine: ObservableObject {
             publish { $0.droppedFrames = v }
         case "audio-params/samplerate":
             let v = int()
-            publish { $0.audio.sampleRate = v }
+            publish {
+                $0.audio.sampleRate = v
+                $0.followSourceSampleRate(v)
+            }
+        case "audio-out-params/samplerate":
+            let v = int()
+            publish {
+                $0.audio.outputSampleRate = v
+                $0.audio.deviceSampleRate = AudioHardware.sampleRate(device: $0.audioDevice)
+            }
+        case "audio-params/format":
+            let v = string()
+            publish { $0.audio.sampleFormat = v }
         case "chapter-list/count":
             refreshChapters(mpv)
         case "chapter":

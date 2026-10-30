@@ -15,17 +15,17 @@
 
 ---
 
-## Trạng thái: v0.2.8 — chất lượng hình ảnh, giải mã phần cứng, Tăng thoại, Trakt
+## Trạng thái: v0.2.9 — FFmpeg build riêng: DSD, WavPack, bitstream HDMI, nhạc hi-res
 
 | Hạng mục | Có trong v0.2.1 |
 |---|---|
-| Lõi phát | libmpv 0.41 + FFmpeg 9.0.2, `vo=gpu-next` (Vulkan → MoltenVK → Metal), **giải mã phần cứng VideoToolbox bật/tắt được** (cả khi đang phát), deinterlace tự động |
+| Lõi phát | libmpv 0.41 + **FFmpeg 9.0.2 build riêng** (thêm DSD, WavPack, MLP, S/PDIF, VVC… — xem `Packages/MPVKit`), `vo=gpu-next` (Vulkan → MoltenVK → Metal), **giải mã phần cứng VideoToolbox bật/tắt được** (cả khi đang phát), deinterlace tự động |
 | Hình ảnh | **Chất lượng hình ảnh** Cân bằng / Cao / Tối đa: phóng to EWA Lanczos (Tối đa: Lanczos 4 nhánh cho cả màu), khử dải màu, tone-map HDR theo đỉnh sáng từng cảnh; **Chuyển động mượt** (display-resample + oversample: hết giật phim 24p trên màn 60 Hz, không hiệu ứng “phim truyền hình”) |
 | HDR | HDR10 / HLG passthrough, Dolby Vision P5/P8 qua libplacebo + libdovi, tone-map → SDR khi màn hình không hỗ trợ |
 | Apple TV | Match Content: tự đổi tần số quét & dải động (`AVDisplayManager`) |
-| Âm thanh | TrueHD, DTS-HD MA, DTS:X, E-AC3/Atmos, FLAC 24/192 → PCM 7.1; macOS bitstream qua HDMI; **Tăng thoại** (kênh giữa to hơn, vòm / siêu trầm nhỏ lại; stereo: nâng phần giữa); **Chế độ ban đêm** (nén dải động từ metadata Dolby AC3 / E-AC3); Mac: **khớp tần số lấy mẫu** với DAC; chỉnh lệch tiếng ±50 ms |
+| Âm thanh | TrueHD, DTS-HD MA, DTS:X, E-AC3/Atmos → PCM 7.1 lossless; **nhạc hi-res**: FLAC / ALAC / WAV / AIFF tới 24-bit 192 kHz, **DSD (DSF / DFF, SACD DST)**, **WavPack**, APE, TTA, TAK, Musepack, file DTS / TrueHD / MLP rời; phát đúng tần số gốc (Mac: khớp tần số DAC; iPhone/iPad: DAC USB / Lightning), bảng Thông tin cho biết có lấy mẫu lại hay không; macOS **bitstream qua HDMI** (AC3 / E-AC3 / DTS, TrueHD / DTS-HD nếu cổng HDMI nhận); **Tăng thoại** (kênh giữa to hơn, vòm / siêu trầm nhỏ lại; stereo: nâng phần giữa); **Chế độ ban đêm** (nén dải động từ metadata Dolby AC3 / E-AC3); Mac: **khớp tần số lấy mẫu** với DAC; chỉnh lệch tiếng ±50 ms |
 | Phụ đề | libass (.ass giữ hiệu ứng), .srt/.vtt/PGS; **tự nạp phụ đề cạnh file trên NAS**; lệch ±0,1 s; cỡ/vị trí/nền chữ |
-| Ổ mạng | **SMB2/3** (SMBClient thuần Swift, stream thẳng vào mpv qua `xtsmb://`, không transcode; **4 kết nối song song + đọc trước + cache khối**, tự kết nối lại khi NAS ngắt), **WebDAV** (HTTP/HTTPS, Basic/Digest, chứng chỉ tự ký), **tự tìm NAS bằng Bonjour**; **ảnh thu nhỏ từng video khi duyệt thư mục** (như Infuse); mật khẩu trong Keychain |
+| Ổ mạng | **SMB2/3** (SMBClient thuần Swift, stream thẳng vào mpv qua `xtsmb://`, không transcode; **4 kết nối song song + đọc trước + cache khối**, tự kết nối lại khi NAS ngắt), **WebDAV** (HTTP/HTTPS, Basic/Digest, chứng chỉ tự ký), **tự tìm NAS bằng Bonjour**; **ảnh thu nhỏ từng video khi duyệt thư mục** (như Infuse), duyệt và phát cả **file nhạc**; mật khẩu trong Keychain |
 | Thư viện | Quét thư mục NAS, nhận diện phim / tập, **poster, backdrop, diễn viên, tóm tắt, tên & ảnh từng tập từ TMDb** — chưa có khoá TMDb thì **lấy từ Trakt** (tên & tóm tắt tiếng Việt, poster, diễn viên, tên tập); không có trên TMDb thì **lấy khung hình trong video làm ảnh bìa** (như Infuse); hàng *Tiếp tục xem*, kệ Phim / TV Shows, trang chi tiết, chọn mùa, đánh dấu đã xem |
 | Giao diện | Thanh bên (Mac / iPad / Apple TV) hoặc tab (iPhone); trên Mac nhóm kiểu Infuse: Tìm kiếm · Trang chủ · **Thư viện** (Phim, TV Shows, Mới thêm, Chưa xem, Điểm cao, Thể loại) · **Tệp** (từng máy chủ & thư mục) · **Cài đặt ghim cuối thanh bên** (⌘,); **banner nổi bật** tự xoay vòng, kệ *Tiếp tục xem* / *Mới thêm*; trang chi tiết kiểu Infuse (ảnh nền lớn, nút *Tiếp tục 00:12:15*, nút vuông, vạch tiến độ) |
 | Player | Thanh điều khiển nổi (kính mờ), thanh tua có bong bóng thời gian + tên chương, **bảng ⚙︎ có tab** Âm thanh · Phụ đề · Video · Chương · Thông tin (codec, HDR, bitrate, đầu ra âm thanh, nhật ký libmpv), hàng đợi + **Up Next**, tốc độ 0.5–2×, Fit / Fill / Stretch, Now Playing, chạm đúp / vuốt để tua; **ảnh xem trước khi tua** (scrub thumbnails); **tìm & tải phụ đề OpenSubtitles** ngay trong bảng Phụ đề; **AirPlay lên Apple TV / TV AirPlay** (Mac, iPhone/iPad) |
@@ -155,6 +155,7 @@ Mở **Cài đặt ▸ Nhật ký trình phát** (hoặc nút ⓘ trong player �
 - [x] **v0.2.5**: Sửa cập nhật trên Mac (tải .dmg qua trình duyệt — bản 0.2.4 tải trong app bị macOS chặn mở)
 - [x] **v0.2.6**: Trakt với ứng dụng PKCE (chỉ cần Client ID, nhúng sẵn qua CI — chỉ bấm Kết nối Trakt rồi nhập mã)
 - [x] **v0.2.7**: Ảnh thu nhỏ từng video khi duyệt NAS; ảnh bìa cho file trên máy (WebM…) và WebDAV
+- [x] **v0.2.9**: FFmpeg build riêng (DSD, WavPack, MLP, TAK, Musepack, DTS/TrueHD rời, VVC, phụ đề PGS rời / VobSub / SAMI…), bitstream HDMI trên Mac chạy thật, Chế độ ban đêm nén dải động thật (dynaudnorm), Tăng thoại cho stereo (dialoguenhance), nhạc hi-res đúng tần số gốc trên iPhone/iPad/Apple TV, bảng Thông tin hi-res, duyệt & phát file nhạc trên NAS
 - [x] **v0.2.8**: chất lượng hình ảnh (Cân bằng / Cao / Tối đa), chuyển động mượt, nút giải mã phần cứng, Tăng thoại, sửa Chế độ ban đêm, khớp tần số lấy mẫu (Mac); sửa Trakt không scrobble; nhận diện phim qua Trakt khi chưa có khoá TMDb; "Chưa xem" chỉ còn mục chưa mở; Cài đặt ghim cuối thanh bên Mac
 - [ ] **v0.3**: Engine AVPlayer cho Dolby Vision và Atmos (Apple TV), song song với libmpv
 - [ ] **v0.4**: Top Shelf (tvOS), Jellyfin / Emby / Plex

@@ -122,7 +122,8 @@ final class UpdateChecker: ObservableObject {
         request.setValue("XT-Player/\(Self.currentVersion)", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 { throw RemoteError.badResponse(http.statusCode) }
-        let releases = try JSONDecoder().decode([GitHubRelease].self, from: data).filter { !$0.draft }
+        // App releases only: "v0.2.8". Other tags on the repository (prebuilt FFmpeg for the build) are not updates.
+        let releases = try JSONDecoder().decode([GitHubRelease].self, from: data).filter { !$0.draft && $0.tag_name.hasPrefix("v") }
         return releases.map(Self.release).max { Self.isNewer($1.version, than: $0.version) }
     }
 

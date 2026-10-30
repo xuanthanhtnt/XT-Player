@@ -66,7 +66,9 @@ struct BrowserView: View {
             ForEach(videos) { item in
                 Button { playFile(item) } label: {
                     HStack(spacing: 12) {
-                        if let resolvedServer {
+                        if item.isAudio {
+                            BrowserAudioIcon()
+                        } else if let resolvedServer {
                             BrowserThumbnail(server: resolvedServer, item: item)
                         } else {
                             Image(systemName: "play.rectangle.fill").foregroundStyle(Theme.leaf)
@@ -87,7 +89,8 @@ struct BrowserView: View {
 
     private var server: ServerCredentials? { PlaybackFactory.server(id: serverID, context: context) }
     private var directories: [RemoteItem] { items.filter(\.isDirectory).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending } }
-    private var videos: [RemoteItem] { items.filter(\.isVideo).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending } }
+    /// Videos and music files, played in folder order as one queue.
+    private var videos: [RemoteItem] { items.filter(\.isPlayable).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending } }
     private var subtitles: [RemoteItem] { items.filter(\.isSubtitle) }
     private var isLibraryFolder: Bool { folders.contains { $0.serverID == serverID && $0.path == path } }
 

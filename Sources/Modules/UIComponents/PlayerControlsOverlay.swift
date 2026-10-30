@@ -996,6 +996,7 @@ struct SignalBadges: View {
             if !engine.audio.codec.isEmpty {
                 TagChip(text: engine.audio.codec + (engine.audio.channels > 0 ? " " + MediaTrack.channelLayout(engine.audio.channels) : ""))
             }
+            if engine.audio.isHighResolution { TagChip(text: "Hi-Res", highlighted: true) }
         }
         .fixedSize()
     }
@@ -1285,6 +1286,8 @@ struct InfoPanel: View {
                 SignalBadges(engine: engine, compact: false)
                 SignalBadges(engine: engine, compact: true)
             }
+            // Music files have no video track: skip the section instead of describing a decoder that is idle.
+            if !engine.videoCodec.isEmpty {
             section("Video") {
                 row("Định dạng", engine.videoCodec)
                 if engine.video.width > 0 { row("Độ phân giải", "\(engine.video.width) × \(engine.video.height)") }
@@ -1298,10 +1301,13 @@ struct InfoPanel: View {
                 if engine.droppedFrames > 0 { row("Khung bị rớt", "\(engine.droppedFrames)", warning: engine.droppedFrames > 30) }
                 if engine.videoBitrate > 0 { row("Bitrate", Self.bitrate(engine.videoBitrate)) }
             }
+            }
             section("Âm thanh") {
                 row("Định dạng", engine.audio.codec)
                 if engine.audio.channels > 0 { row("Kênh", MediaTrack.channelLayout(engine.audio.channels)) }
-                if engine.audio.sampleRate > 0 { row("Tần số", String(format: "%.1f kHz", Double(engine.audio.sampleRate) / 1000)) }
+                if engine.audio.sampleRate > 0 { row("Tần số", Self.kHz(Double(engine.audio.sampleRate)) + (engine.audio.isHighResolution ? " · Hi-Res" : "")) }
+                row("Mẫu giải mã", Self.sampleFormat(engine.audio.sampleFormat))
+                if !engine.isBitstreaming { row("Ra thiết bị", Self.outputRate(engine.audio)) }
                 if engine.audio.outputChannels > 0, !engine.isBitstreaming { row("Kênh ra", MediaTrack.channelLayout(engine.audio.outputChannels)) }
                 let enhancements = [engine.dialogBoost ? "Tăng thoại" : nil, engine.nightMode ? "Ban đêm" : nil].compactMap { $0 }
                 if !enhancements.isEmpty, !engine.isBitstreaming { row("Xử lý tiếng", enhancements.joined(separator: " · ")) }
@@ -1369,6 +1375,31 @@ struct InfoPanel: View {
         if !engine.hardwareDecoder.isEmpty, engine.hardwareDecoder != "no" { return "Phần cứng · \(engine.hardwareDecoder)" }
         guard engine.state == .playing || engine.state == .paused || engine.state == .ended else { return "" }
         return engine.hardwareDecoding ? "Phần mềm (CPU) — chip không giải mã được định dạng này" : "Phần mềm (CPU) — đã tắt giải mã phần cứng"
+    }
+
+    static func kHz(_ hertz: Double) -> String {
+        String(format: hertz.truncatingRemainder(dividingBy: 1000) == 0 ? "%.0f kHz" : "%.1f kHz", hertz / 1000)
+    }
+
+    /// libavcodec's output format: what precision the decoder delivers.
+    static func sampleFormat(_ format: String) -> String {
+        switch format {
+        case "": return ""
+        case "u8", "u8p": return "8-bit"
+        case "s16", "s16p": return "16-bit"
+        case "s32", "s32p": return "24 / 32-bit nguyên (lossless)"
+        case "float", "floatp": return "32-bit float"
+        case "double", "doublep": return "64-bit float"
+        default: return format
+        }
+    }
+
+    /// Whether the file's rate reaches the hardware untouched, or who resamples it.
+    static func outputRate(_ audio: AudioSignal) -> String {
+        guard audio.sampleRate > 0, audio.outputSampleRate > 0 else { return "" }
+        let device = audio.deviceSampleRate > 0 ? audio.deviceSampleRate : Double(audio.outputSampleRate)
+        if audio.isNativeRate { return kHz(device) + " · đúng tần số gốc" }
+        return kHz(Double(audio.sampleRate)) + " → " + kHz(device) + " (lấy mẫu lại)"
     }
 
     static func bitrate(_ bitsPerSecond: Double) -> String {

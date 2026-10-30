@@ -76,14 +76,15 @@ struct SettingsView: View {
                 #if os(macOS)
                 Toggle("Khớp tần số lấy mẫu với DAC / loa ngoài", isOn: $matchSampleRate)
                 Toggle("Bitstream TrueHD / DTS-HD / E-AC3 qua HDMI", isOn: $audioPassthrough)
+                    .disabled(!MPVPlayerEngine.bitstreamSupported)
                 #endif
             } header: {
                 Text("Âm thanh")
             } footer: {
                 #if os(macOS)
-                Text("Tăng thoại: kênh giữa to hơn, kênh vòm và siêu trầm nhỏ lại. Ban đêm: dùng thông tin nén dải động có sẵn trong âm thanh Dolby (AC3 / E-AC3) để tiếng nổ không quá to. Khớp tần số: đổi tần số của thiết bị theo file (44,1 / 48 / 96 kHz), không để macOS lấy mẫu lại. Bitstream chỉ cần khi Mac nối ampli qua HDMI; lúc bitstream, âm lượng chỉnh trên ampli và các xử lý trên không áp dụng.")
+                Text("Tăng thoại: kênh giữa to hơn, kênh vòm và siêu trầm nhỏ lại (stereo: tách dải giọng nói). Ban đêm: nén dải động — tiếng nói nhỏ được nâng lên, tiếng nổ được giữ lại — cộng thông tin nén có sẵn trong âm thanh Dolby. Khớp tần số: đổi tần số của thiết bị theo file (44,1 / 48 / 96 / 192 kHz), không để macOS lấy mẫu lại — bật khi dùng DAC hoặc loa ngoài để nghe hi-res đúng gốc (bảng Thông tin trong trình phát cho biết có lấy mẫu lại hay không). Bitstream: gửi nguyên AC3 / E-AC3 / DTS (và TrueHD / DTS-HD MA nếu cổng HDMI của Mac nhận) cho ampli giải mã; thiết bị không nhận thì app tự giải mã lossless thành PCM.")
                 #else
-                Text("Tăng thoại: kênh giữa to hơn, kênh vòm và siêu trầm nhỏ lại. Ban đêm: dùng thông tin nén dải động có sẵn trong âm thanh Dolby (AC3 / E-AC3) để tiếng nổ không quá to.")
+                Text("Tăng thoại: kênh giữa to hơn, kênh vòm và siêu trầm nhỏ lại (stereo: tách dải giọng nói). Ban đêm: nén dải động — tiếng nói nhỏ được nâng lên, tiếng nổ được giữ lại. Âm thanh hi-res (44,1–192 kHz) phát đúng tần số gốc khi cắm DAC USB / Lightning.")
                 #endif
             }
 
