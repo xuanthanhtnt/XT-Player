@@ -50,17 +50,17 @@ struct TraktSettingsSection: View {
                     } label: {
                         Label("Kết nối Trakt", systemImage: "link")
                     }
-                    Button("Đổi Client ID / Secret") { showAppFields = true }
+                    Button("Đổi Client ID") { showAppFields = true }
                 } else {
                     TextField("Client ID", text: $clientID)
                         .autocorrectionDisabled()
-                    SecureField("Client Secret", text: $clientSecret)
+                    SecureField("Client Secret (để trống nếu Trakt ghi “Chưa được phát hành”)", text: $clientSecret)
                     Button("Lưu ứng dụng Trakt") {
                         Keychain.set(clientID.trimmingCharacters(in: .whitespacesAndNewlines), account: "trakt.clientID")
                         Keychain.set(clientSecret.trimmingCharacters(in: .whitespacesAndNewlines), account: "trakt.clientSecret")
                         showAppFields = false
                     }
-                    .disabled(clientID.isEmpty || clientSecret.isEmpty)
+                    .disabled(clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
             if !trakt.status.isEmpty {
@@ -69,7 +69,7 @@ struct TraktSettingsSection: View {
         } header: {
             Text("Trakt")
         } footer: {
-            Text("Đồng bộ đã xem và điểm xem tiếp giữa Mac, iPhone, Apple TV (và Infuse nếu cũng nối Trakt). Lần đầu: tạo ứng dụng tại trakt.tv/oauth/applications/new — App type: Development, Redirect URIs: http://localhost — rồi dán Client ID và Client Secret ở trên.")
+            Text("Đồng bộ đã xem và điểm xem tiếp giữa Mac, iPhone, Apple TV (và Infuse nếu cũng nối Trakt). Lần đầu: tạo ứng dụng tại trakt.tv/oauth/applications/new — App type: Development, Redirect URIs: http://localhost — rồi dán Mã khách hàng (Client ID) ở trên. Ứng dụng Trakt mới không có Client Secret: để trống ô đó.")
         }
         .onAppear {
             clientID = Keychain.get(account: "trakt.clientID") ?? ""

@@ -45,7 +45,7 @@ Còn thiếu so với Infuse (lộ trình):
 
 ### Trakt
 
-Tạo ứng dụng tại trakt.tv/oauth/applications/new (App type: **Development**, Redirect URIs: `http://localhost`), dán **Client ID** và **Client Secret** vào **Cài đặt ▸ Trakt**, bấm **Kết nối Trakt** rồi nhập mã hiện ra tại trakt.tv/activate. Có thể đặt secret `TRAKT_CLIENT_ID` / `TRAKT_CLIENT_SECRET` để CI nhúng sẵn (bản build công khai sẽ chứa cặp khoá này).
+Tạo ứng dụng tại trakt.tv/oauth/applications/new (App type: **Development**, Redirect URIs: `http://localhost`), dán **Client ID** (Mã khách hàng) vào **Cài đặt ▸ Trakt** — ứng dụng Trakt tạo từ tháng 10/2026 dùng PKCE và không có Client Secret, để trống ô đó — bấm **Kết nối Trakt** rồi nhập mã hiện ra tại trakt.tv/activate. Có thể đặt secret `TRAKT_CLIENT_ID` / `TRAKT_CLIENT_SECRET` để CI nhúng sẵn (bản build công khai sẽ chứa cặp khoá này).
 
 ### OpenSubtitles
 

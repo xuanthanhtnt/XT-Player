@@ -116,7 +116,7 @@ final class TraktService: ObservableObject {
 
     func startLogin(context: ModelContext) {
         guard let client = AppSettings.traktClient else {
-            status = "Nhập Client ID và Client Secret của ứng dụng Trakt trước."
+            status = "Nhập Client ID của ứng dụng Trakt trước."
             return
         }
         loginTask?.cancel()
@@ -133,7 +133,7 @@ final class TraktService: ObservableObject {
                 while Date() < deadline, !Task.isCancelled {
                     try await Task.sleep(for: .seconds(interval))
                     let (status, body) = try await raw("/oauth/device/token", method: "POST",
-                                                       body: ["code": deviceCode, "client_id": client.id, "client_secret": client.secret],
+                                                       body: Self.withSecret(["code": deviceCode, "client_id": client.id], client.secret),
                                                        authorized: false)
                     switch status {
                     case 200:
@@ -167,7 +167,7 @@ final class TraktService: ObservableObject {
     func disconnect() {
         if let token, let client = AppSettings.traktClient {
             let access = token.access
-            Task { _ = try? await raw("/oauth/revoke", method: "POST", body: ["token": access, "client_id": client.id, "client_secret": client.secret], authorized: false) }
+            Task { _ = try? await raw("/oauth/revoke", method: "POST", body: Self.withSecret(["token": access, "client_id": client.id], client.secret), authorized: false) }
         }
         token = nil
         Keychain.set(nil, account: Self.tokenAccount)
@@ -347,6 +347,7 @@ final class TraktService: ObservableObject {
             switch self {
             case .http(401): return "Trakt: phiên đăng nhập hết hạn — kết nối lại."
             case .http(403): return "Trakt từ chối Client ID (403) — kiểm tra lại ứng dụng Trakt."
+            case .http(400): return "Trakt từ chối yêu cầu (400) — nếu ứng dụng Trakt không có Client Secret, hãy xoá ô Client Secret."
             case let .http(code): return "Trakt lỗi \(code)."
             case let .message(text): return text
             }
@@ -371,6 +372,14 @@ final class TraktService: ObservableObject {
         if let data = try? JSONEncoder().encode(token) { Keychain.set(String(decoding: data, as: UTF8.self), account: Self.tokenAccount) }
     }
 
+    /// Older Trakt apps have a client secret; PKCE apps (no secret) must not send one ("invalid_client").
+    private static func withSecret(_ body: [String: Any], _ secret: String?) -> [String: Any] {
+        guard let secret else { return body }
+        var body = body
+        body["client_secret"] = secret
+        return body
+    }
+
     /// Redirect URIs a Trakt app may be registered with: new (Development) apps only accept localhost, older
     /// apps used the out-of-band URN. The refresh request must name the registered one.
     private static let redirectURIs = ["http://localhost", "http://127.0.0.1", "urn:ietf:wg:oauth:2.0:oob"]
@@ -382,10 +391,10 @@ final class TraktService: ObservableObject {
         guard token.expires.timeIntervalSinceNow < 3_600, let client = AppSettings.traktClient else { return token.access }
         var status = 0
         for redirect in Self.redirectURIs {
-            let (code, body) = try await raw("/oauth/token", method: "POST", body: [
-                "refresh_token": token.refresh, "client_id": client.id, "client_secret": client.secret,
+            let (code, body) = try await raw("/oauth/token", method: "POST", body: Self.withSecret([
+                "refresh_token": token.refresh, "client_id": client.id,
                 "redirect_uri": redirect, "grant_type": "refresh_token",
-            ], authorized: false)
+            ], client.secret), authorized: false)
             if code == 200 {
                 try store(body)
                 return self.token?.access ?? token.access

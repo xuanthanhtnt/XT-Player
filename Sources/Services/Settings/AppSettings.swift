@@ -43,16 +43,16 @@ enum AppSettings {
 
     static var defaults: UserDefaults { .standard }
 
-    /// The Trakt API application (client id + secret): user setting first, then the build-time pair
-    /// (CI secrets TRAKT_CLIENT_ID / TRAKT_CLIENT_SECRET).
-    static var traktClient: (id: String, secret: String)? {
-        if let id = Keychain.get(account: "trakt.clientID"), !id.isEmpty,
-           let secret = Keychain.get(account: "trakt.clientSecret"), !secret.isEmpty {
-            return (id, secret)
+    /// The Trakt API application: user setting first, then the build-time one (CI secrets TRAKT_CLIENT_ID /
+    /// TRAKT_CLIENT_SECRET). Apps created since October 2026 sign in with PKCE and have no secret (nil).
+    static var traktClient: (id: String, secret: String?)? {
+        if let id = Keychain.get(account: "trakt.clientID"), !id.isEmpty {
+            let secret = Keychain.get(account: "trakt.clientSecret")
+            return (id, secret?.isEmpty == false ? secret : nil)
         }
-        if let id = Bundle.main.object(forInfoDictionaryKey: "XTTraktClientID") as? String, !id.isEmpty, !id.hasPrefix("$("),
-           let secret = Bundle.main.object(forInfoDictionaryKey: "XTTraktClientSecret") as? String, !secret.isEmpty, !secret.hasPrefix("$(") {
-            return (id, secret)
+        if let id = Bundle.main.object(forInfoDictionaryKey: "XTTraktClientID") as? String, !id.isEmpty, !id.hasPrefix("$(") {
+            let secret = Bundle.main.object(forInfoDictionaryKey: "XTTraktClientSecret") as? String
+            return (id, secret.flatMap { $0.isEmpty || $0.hasPrefix("$(") ? nil : $0 })
         }
         return nil
     }
