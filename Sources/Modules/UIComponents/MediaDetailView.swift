@@ -495,7 +495,8 @@ struct MediaDetailView: View {
         if let year = item.year { parts.append(String(year)) }
         if item.kind == .show {
             parts.append("\(max(1, seasons.count)) mùa · \(files.count) tập")
-        } else if let runtime = item.runtime, runtime > 0 {
+        } else if let runtime = item.runtime ?? files.first.flatMap({ entryByKey[$0.key] }).map({ Int(($0.duration / 60).rounded()) }),
+                  runtime > 0 {
             parts.append(runtime >= 60 ? "\(runtime / 60) giờ \(runtime % 60) phút" : "\(runtime) phút")
         }
         if let rating = item.rating, rating > 0 { parts.append("★ " + String(format: "%.1f", rating)) }

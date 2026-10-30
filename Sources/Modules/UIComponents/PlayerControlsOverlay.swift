@@ -49,6 +49,7 @@ struct PlayerControlsOverlay: View {
     #else
     var airPlay: AirPlayController? = nil
     #endif
+    @ObservedObject var thumbnails: ScrubThumbnailer
 
     /// Time shown while dragging the scrubber, and until the seek lands.
     @State private var scrubPosition: Double?
@@ -195,6 +196,10 @@ struct PlayerControlsOverlay: View {
                         return [engine.chapters.last { $0.time <= time }?.title, TimeFormat.clock(time)].compactMap { $0 }
                     },
                     bubbleLift: 50,
+                    preview: { at in thumbnails.image(at: at * engine.duration) },
+                    onPointer: { at in
+                        if let at, engine.duration > 0 { thumbnails.request(at * engine.duration) }
+                    },
                     onChange: { at in
                         isScrubbing = true
                         scrubPosition = at * engine.duration
@@ -486,7 +491,11 @@ struct PlayerControlsOverlay: View {
             ScrubBar(position: engine.position, duration: engine.duration,
                      bufferedUntil: engine.position + engine.bufferedSeconds, marks: chapterMarks,
                      chapters: engine.chapters, scrubPosition: $scrubPosition,
-                     onCommit: { engine.seek(to: $0) }, onInteraction: onInteraction)
+                     onCommit: { engine.seek(to: $0) }, onInteraction: onInteraction,
+                     preview: scrubPosition.flatMap { thumbnails.image(at: $0) })
+                .onChange(of: scrubPosition) { _, position in
+                    if let position { thumbnails.request(position) }
+                }
             #endif
             Text("-" + TimeFormat.clock(max(0, engine.duration - (scrubPosition ?? engine.position))))
                 .frame(minWidth: Self.timeWidth, alignment: .trailing)
@@ -629,7 +638,7 @@ struct PlayerControlsOverlay: View {
                 Group {
                     switch current {
                     case .audio: AudioPanel(engine: engine, onInteraction: onInteraction)
-                    case .subtitles: SubtitlePanel(engine: engine, onInteraction: onInteraction)
+                    case .subtitles: SubtitlePanel(engine: engine, title: title, onInteraction: onInteraction)
                     case .video: VideoPanel(engine: engine, onInteraction: onInteraction)
                     case .chapters: ChaptersPanel(engine: engine, onInteraction: onInteraction)
                     case .info: InfoPanel(engine: engine)
@@ -731,6 +740,10 @@ struct PlayerSlider: View {
     /// Lines of the bubble shown above the pointer while hovering or dragging; nil = no bubble.
     var bubble: ((Double) -> [String])?
     var bubbleLift: CGFloat = 40
+    /// Preview frame shown above the bubble (scrub thumbnails).
+    var preview: ((Double) -> CGImage?)?
+    /// Where the pointer hovers or drags (nil = left), so previews can be requested.
+    var onPointer: ((Double?) -> Void)?
     let onChange: (Double) -> Void
     var onEnd: (Double) -> Void = { _ in }
 
@@ -775,11 +788,13 @@ struct PlayerSlider: View {
                     .onChanged { drag in
                         let at = fraction(drag.location.x, travel: travel)
                         dragging = at
+                        onPointer?(at)
                         onChange(at)
                     }
                     .onEnded { drag in
                         let at = fraction(drag.location.x, travel: travel)
                         dragging = nil
+                        onPointer?(hover)
                         onEnd(at)
                     }
             )
@@ -788,11 +803,18 @@ struct PlayerSlider: View {
                 case let .active(point): hover = fraction(point.x, travel: travel)
                 case .ended: hover = nil
                 }
+                if dragging == nil { onPointer?(hover) }
             }
             .overlay(alignment: .topLeading) {
                 if isEnabled, let bubble, let at = dragging ?? hover {
                     let lines = bubble(at)
+                    let image = preview?(at)
+                    let margin: CGFloat = image == nil ? 50 : 104
                     VStack(spacing: 1) {
+                        if let image {
+                            ScrubPreviewImage(image: image, width: 192)
+                                .padding(.bottom, 4)
+                        }
                         ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                             Text(line)
                                 .font(index < lines.count - 1 ? Font.caption2 : Font.caption.weight(.semibold).monospacedDigit())
@@ -803,7 +825,8 @@ struct PlayerSlider: View {
                     .padding(.vertical, 5)
                     .background(Color.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .fixedSize()
-                    .position(x: min(max(knobSize / 2 + travel * at, 50), max(50, width - 50)), y: geo.size.height / 2 - bubbleLift)
+                    .position(x: min(max(knobSize / 2 + travel * at, margin), max(margin, width - margin)),
+                              y: geo.size.height / 2 - bubbleLift - (image == nil ? 0 : 58))
                     .allowsHitTesting(false)
                 }
             }
@@ -862,6 +885,7 @@ struct ScrubBar: View {
     @Binding var scrubPosition: Double?
     let onCommit: (Double) -> Void
     let onInteraction: () -> Void
+    var preview: CGImage?
 
     var body: some View {
         GeometryReader { geo in
@@ -892,6 +916,10 @@ struct ScrubBar: View {
                 if let scrubPosition {
                     let x = CGFloat(scrubPosition / max(duration, 1)) * width
                     VStack(spacing: 2) {
+                        if let preview {
+                            ScrubPreviewImage(image: preview, width: 160)
+                                .padding(.bottom, 2)
+                        }
                         if let chapter = chapters.last(where: { $0.time <= scrubPosition })?.title {
                             Text(chapter).font(.caption2).lineLimit(1)
                         }
@@ -901,7 +929,7 @@ struct ScrubBar: View {
                     .padding(.vertical, 4)
                     .background(Color.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .fixedSize()
-                    .position(x: min(max(x, 40), width - 40), y: -18)
+                    .position(x: min(max(x, preview == nil ? 40 : 88), width - (preview == nil ? 40 : 88)), y: preview == nil ? -18 : -66)
                     .allowsHitTesting(false)
                 }
             }
@@ -1126,6 +1154,7 @@ struct AudioPanel: View {
 
 struct SubtitlePanel: View {
     @ObservedObject var engine: MPVPlayerEngine
+    let title: String
     let onInteraction: () -> Void
 
     var body: some View {
@@ -1142,6 +1171,7 @@ struct SubtitlePanel: View {
                     }
                 }
             }
+            OnlineSubtitlesSection(engine: engine, title: title, onInteraction: onInteraction)
             PanelSection(title: "Đồng bộ") {
                 PanelStepper(title: "Lệch phụ đề", value: String(format: "%+.1f s", engine.subtitleDelay),
                              minus: { engine.adjustSubtitleDelay(by: -0.1); onInteraction() },

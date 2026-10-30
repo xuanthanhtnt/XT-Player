@@ -248,6 +248,8 @@ final class MPVPlayerEngine: ObservableObject {
     @Published private(set) var readSpeed: Double = 0
     /// The current file comes through the app's xtsmb:// bridge (its traffic is in `StreamTrafficMeter`).
     @Published private(set) var readsThroughBridge = false
+    /// What `load` was given (path or URL), for subtitle search by file hash.
+    private(set) var currentLocation = ""
     @Published private(set) var video = VideoSignal()
     @Published private(set) var audio = AudioSignal()
     @Published private(set) var hardwareDecoder = ""
@@ -363,6 +365,7 @@ final class MPVPlayerEngine: ObservableObject {
         duration = 0
         chapters = []
         readsThroughBridge = location.hasPrefix("xtsmb:")
+        currentLocation = location
         queue.async {
             self.pendingSubtitles = externalSubtitles
             var args = ["loadfile", location, "replace", "-1"]
@@ -384,6 +387,11 @@ final class MPVPlayerEngine: ObservableObject {
     }
 
     func selectAudioTrack(_ id: Int) { setProperty("aid", "\(id)") }
+
+    /// Loads a subtitle file (e.g. downloaded from OpenSubtitles) and shows it.
+    func addSubtitle(_ path: String) {
+        queue.async { self.command(["sub-add", path, "select"]) }
+    }
 
     /// nil disables subtitles.
     func selectSubtitleTrack(_ id: Int?) { setProperty("sid", id.map { "\($0)" } ?? "no") }

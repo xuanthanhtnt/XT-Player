@@ -9,9 +9,18 @@ import Libmpv
 /// MPVKit's FFmpeg has no image encoders (vo=image cannot save), so the frame is taken with
 /// `screenshot-raw` and encoded with ImageIO.
 enum FrameGrabber {
-    /// Blocking; call off the main thread. The frame is taken at `fraction` of the duration.
-    static func grab(_ location: String, to output: URL, at fraction: Double = 0.2, timeout: TimeInterval = 45) -> Bool {
-        guard let mpv = mpv_create() else { return false }
+    /// What the file turned out to be (Infuse shows it for files TMDb does not know).
+    struct Probe {
+        let duration: Double
+        let width: Int
+        let height: Int
+
+        var resolutionLabel: String { VideoSignal(width: width, height: height).resolutionLabel }
+    }
+
+    /// Blocking; call off the main thread. The frame is taken at `fraction` of the duration; nil = no frame.
+    static func grab(_ location: String, to output: URL, at fraction: Double = 0.2, timeout: TimeInterval = 45) -> Probe? {
+        guard let mpv = mpv_create() else { return nil }
         defer { mpv_terminate_destroy(mpv) }
 
         let settings: [(String, String)] = [
@@ -39,9 +48,9 @@ enum FrameGrabber {
         for (name, value) in settings {
             mpv_set_option_string(mpv, name, value)
         }
-        guard mpv_initialize(mpv) >= 0 else { return false }
+        guard mpv_initialize(mpv) >= 0 else { return nil }
         MPVStreamProtocols.register(on: mpv)
-        guard command(mpv, ["loadfile", location]) else { return false }
+        guard command(mpv, ["loadfile", location]) else { return nil }
 
         // Paused from the start, mpv stops on the first frame after the initial seek.
         let deadline = Date().addingTimeInterval(timeout)
@@ -50,21 +59,29 @@ enum FrameGrabber {
             switch event.pointee.event_id {
             case MPV_EVENT_PLAYBACK_RESTART:
                 for _ in 0..<10 {
-                    if let image = rawFrame(mpv) { return writeJPEG(image, to: output) }
+                    if let image = rawFrame(mpv) {
+                        guard writeJPEG(image, to: output) else { return nil }
+                        var duration = 0.0
+                        mpv_get_property(mpv, "duration", MPV_FORMAT_DOUBLE, &duration)
+                        var width: Int64 = 0, height: Int64 = 0
+                        mpv_get_property(mpv, "video-dec-params/w", MPV_FORMAT_INT64, &width)
+                        mpv_get_property(mpv, "video-dec-params/h", MPV_FORMAT_INT64, &height)
+                        return Probe(duration: duration, width: Int(width), height: Int(height))
+                    }
                     Thread.sleep(forTimeInterval: 0.2)
                 }
-                return false
+                return nil
             case MPV_EVENT_END_FILE, MPV_EVENT_SHUTDOWN:
-                return false
+                return nil
             default:
                 continue
             }
         }
-        return false
+        return nil
     }
 
-    /// The displayed frame as a CGImage (`screenshot-raw` returns bgr0 pixels).
-    private static func rawFrame(_ mpv: OpaquePointer) -> CGImage? {
+    /// The displayed frame as a CGImage (`screenshot-raw` returns bgr0 pixels). Also used by `ScrubThumbnailer`.
+    static func rawFrame(_ mpv: OpaquePointer) -> CGImage? {
         let words: [String] = ["screenshot-raw", "video"]
         var args: [UnsafePointer<CChar>?] = words.map { UnsafePointer(strdup($0)) }
         args.append(nil)
@@ -106,7 +123,7 @@ enum FrameGrabber {
         return CGImageDestinationFinalize(destination)
     }
 
-    private static func command(_ mpv: OpaquePointer, _ words: [String]) -> Bool {
+    static func command(_ mpv: OpaquePointer, _ words: [String]) -> Bool {
         var args: [UnsafePointer<CChar>?] = words.map { UnsafePointer(strdup($0)) }
         args.append(nil)
         defer { args.forEach { free(UnsafeMutablePointer(mutating: $0)) } }

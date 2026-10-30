@@ -14,6 +14,10 @@ struct PlayerScreen: View {
     #if !os(tvOS)
     @StateObject private var airPlay = AirPlayController()
     #endif
+    @StateObject private var thumbnails = ScrubThumbnailer()
+    /// What Trakt is told about the current file (nil = not something Trakt knows).
+    @State private var traktMedia: TraktMedia?
+    @State private var traktStopped = true
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppSettings.autoplayNext) private var autoplayNext = true
@@ -92,7 +96,8 @@ struct PlayerScreen: View {
                         if !inside { scheduleHide() }
                     },
                     onInteraction: scheduleHide,
-                    airPlay: airPlayController
+                    airPlay: airPlayController,
+                    thumbnails: thumbnails
                 )
                 .transition(.opacity)
             }
@@ -123,13 +128,21 @@ struct PlayerScreen: View {
             }
 
             if let text = seekFlash ?? scrubText {
-                Text(text)
-                    .font(.title2.weight(.bold).monospacedDigit())
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 12)
-                    .glassPanel(cornerRadius: 18)
-                    .transition(.scale.combined(with: .opacity))
-                    .allowsHitTesting(false)
+                VStack(spacing: 10) {
+                    if seekFlash == nil, let target = scrubTarget, let image = thumbnails.image(at: target) {
+                        ScrubPreviewImage(image: image, width: 280)
+                    }
+                    Text(text)
+                        .font(.title2.weight(.bold).monospacedDigit())
+                }
+                .padding(.horizontal, 22)
+                .padding(.vertical, 12)
+                .glassPanel(cornerRadius: 18)
+                .transition(.scale.combined(with: .opacity))
+                .allowsHitTesting(false)
+                .onChange(of: scrubTarget) { _, target in
+                    if let target { thumbnails.request(target) }
+                }
             }
 
             if let countdown = upNextCountdown, let next {
@@ -154,7 +167,17 @@ struct PlayerScreen: View {
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { saveProgress() }
         }
+        .onChange(of: engine.video.resolutionLabel) { _, label in
+            guard !label.isEmpty else { return }
+            MediaLibrary.learn(fileKey: current.key, resolution: label, duration: engine.duration, in: context)
+        }
         .onChange(of: engine.state) { _, state in
+            switch state {
+            case .playing: scrobble(.start)
+            case .paused: scrobble(.pause)
+            case .ended: scrobble(.stop, progress: 100)
+            default: break
+            }
             switch state {
             case .ended:
                 saveProgress()
@@ -360,6 +383,11 @@ struct PlayerScreen: View {
         #endif
     }
 
+    /// Where a swipe-to-seek would land.
+    private var scrubTarget: Double? {
+        scrubDelta.map { max(0, min(engine.duration, engine.position + $0)) }
+    }
+
     private var scrubText: String? {
         guard let scrubDelta else { return nil }
         let target = max(0, min(engine.duration, engine.position + scrubDelta))
@@ -389,6 +417,8 @@ struct PlayerScreen: View {
 
     private func load(_ item: PlaybackItem) {
         cancelUpNext()
+        scrobble(.stop)
+        traktMedia = TraktMedia.from(fileKey: item.key, fallbackName: item.source.displayName, in: context)
         access = SecurityScopedAccess(item.source.url)
         if let server = item.server { RemoteCredentialStore.shared.register(server) }
         entry = MediaLibrary.touch(item, in: context)
@@ -397,6 +427,7 @@ struct PlayerScreen: View {
         if airPlay.isActive { airPlay.shutdown() }
         airPlay.location = item.source.playbackLocation
         #endif
+        thumbnails.reset(location: item.source.playbackLocation)
         engine.load(item.source.playbackLocation, startAt: item.startAt, externalSubtitles: item.externalSubtitles)
         nowPlaying.setItem(title: item.title, subtitle: item.subtitle,
                            artworkURL: TMDbClient.imageURL(item.artworkPath, size: "w780"))
@@ -407,9 +438,12 @@ struct PlayerScreen: View {
         hideTask?.cancel()
         cancelUpNext()
         saveProgress()
+        scrobble(.stop)
+        traktMedia = nil
         #if !os(tvOS)
         airPlay.shutdown()
         #endif
+        thumbnails.reset(location: nil)
         nowPlaying.detach()
         engine.shutdown()
         access = nil
@@ -436,6 +470,19 @@ struct PlayerScreen: View {
         guard let entry, engine.duration > 0 || engine.position > 0 else { return }
         let finished = engine.state == .ended
         MediaLibrary.saveProgress(entry, position: finished ? engine.duration : engine.position, duration: engine.duration, in: context)
+    }
+
+    /// Trakt scrobble for the current file; a stop under 80 % leaves a resume point other devices pick up.
+    private func scrobble(_ action: TraktService.ScrobbleAction, progress: Double? = nil) {
+        guard let traktMedia, engine.duration > 0 else { return }
+        switch action {
+        case .start: traktStopped = false
+        case .pause: guard !traktStopped else { return }
+        case .stop:
+            guard !traktStopped else { return }
+            traktStopped = true
+        }
+        TraktService.shared.scrobble(action, media: traktMedia, progress: progress ?? engine.position / engine.duration * 100)
     }
 
     private var airPlayActive: Bool {

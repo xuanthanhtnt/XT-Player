@@ -73,7 +73,10 @@ struct RootView: View {
             .environment(\.play, PlayAction { session = $0 })
             .environment(\.openSection, { section = $0 })
             .environmentObject(scanner)
-            .task { await scanner.generateMissingArtwork(context: context) }
+            .task {
+                await TraktService.shared.sync(context: context)
+                await scanner.generateMissingArtwork(context: context)
+            }
             #if !os(tvOS)
             .fileImporter(isPresented: $showImporter, allowedContentTypes: Self.playableTypes, allowsMultipleSelection: false) { result in
                 switch result {

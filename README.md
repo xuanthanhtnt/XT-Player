@@ -15,7 +15,7 @@
 
 ---
 
-## Trạng thái: v0.2.3 — Stream NAS mượt, AirPlay, tự cập nhật
+## Trạng thái: v0.2.4 — Trakt, xem trước khi tua, phụ đề OpenSubtitles, AirPlay
 
 | Hạng mục | Có trong v0.2.1 |
 |---|---|
@@ -27,7 +27,8 @@
 | Ổ mạng | **SMB2/3** (SMBClient thuần Swift, stream thẳng vào mpv qua `xtsmb://`, không transcode; **4 kết nối song song + đọc trước + cache khối**, tự kết nối lại khi NAS ngắt), **WebDAV** (HTTP/HTTPS, Basic/Digest, chứng chỉ tự ký), **tự tìm NAS bằng Bonjour**; mật khẩu trong Keychain |
 | Thư viện | Quét thư mục NAS, nhận diện phim / tập, **poster, backdrop, diễn viên, tóm tắt, tên & ảnh từng tập từ TMDb**; không có trên TMDb thì **lấy khung hình trong video làm ảnh bìa** (như Infuse); hàng *Tiếp tục xem*, kệ Phim / TV Shows, trang chi tiết, chọn mùa, đánh dấu đã xem |
 | Giao diện | Thanh bên (Mac / iPad / Apple TV) hoặc tab (iPhone); trên Mac nhóm kiểu Infuse: Tìm kiếm · Trang chủ · **Thư viện** (Phim, TV Shows, Mới thêm, Chưa xem, Điểm cao, Thể loại) · **Tệp** (từng máy chủ & thư mục) · Cài đặt; **banner nổi bật** tự xoay vòng, kệ *Tiếp tục xem* / *Mới thêm*; trang chi tiết kiểu Infuse (ảnh nền lớn, nút *Tiếp tục 00:12:15*, nút vuông, vạch tiến độ) |
-| Player | Thanh điều khiển nổi (kính mờ), thanh tua có bong bóng thời gian + tên chương, **bảng ⚙︎ có tab** Âm thanh · Phụ đề · Video · Chương · Thông tin (codec, HDR, bitrate, đầu ra âm thanh, nhật ký libmpv), hàng đợi + **Up Next**, tốc độ 0.5–2×, Fit / Fill / Stretch, Now Playing, chạm đúp / vuốt để tua; **AirPlay lên Apple TV / TV AirPlay** (Mac, iPhone/iPad) |
+| Player | Thanh điều khiển nổi (kính mờ), thanh tua có bong bóng thời gian + tên chương, **bảng ⚙︎ có tab** Âm thanh · Phụ đề · Video · Chương · Thông tin (codec, HDR, bitrate, đầu ra âm thanh, nhật ký libmpv), hàng đợi + **Up Next**, tốc độ 0.5–2×, Fit / Fill / Stretch, Now Playing, chạm đúp / vuốt để tua; **ảnh xem trước khi tua** (scrub thumbnails); **tìm & tải phụ đề OpenSubtitles** ngay trong bảng Phụ đề; **AirPlay lên Apple TV / TV AirPlay** (Mac, iPhone/iPad) |
+| Trakt | Đăng nhập bằng mã (cả Apple TV), **scrobble** khi xem, **đồng bộ đã xem và điểm xem tiếp** giữa Mac / iPhone / Apple TV (và Infuse nếu cũng nối Trakt) |
 | Cập nhật | Tự kiểm tra GitHub Releases mỗi ngày; Mac tải và mở bộ cài .dmg, iPhone/iPad mở trang tải; **Cài đặt ▸ Cập nhật** hoặc menu *Kiểm tra cập nhật…* |
 | macOS | Bản cài **.dmg**; trình phát kiểu Infuse (nút *Đóng*, thanh nổi: âm lượng · ⏮ ↺ ▶ ↻ ⏭ · ⚙︎ · cửa sổ nổi · toàn màn hình); **cửa sổ lấy đúng tỉ lệ video — không viền đen**, dải tiêu đề mờ; **cửa sổ nổi** (nhỏ, luôn ở trên); âm lượng + chọn thiết bị phát, rê chuột hiện điều khiển / tự ẩn con trỏ; phím tắt Space ← → ↑ ↓ N M A I T Z X F Esc |
 
@@ -38,11 +39,17 @@ Ngang hoặc hơn: định dạng và codec (FFmpeg đầy đủ), phụ đề A
 Còn thiếu so với Infuse (lộ trình):
 
 - **Dolby Vision ở chế độ DV thật của TV và Atmos qua Dolby MAT trên Apple TV.** Cần engine AVPlayer chạy song song với libmpv, và phải test trên thiết bị.
-- Đồng bộ Trakt và iCloud.
-- Tải phụ đề từ OpenSubtitles.
-- Ảnh xem trước khi tua (scrub thumbnails).
+- Đồng bộ iCloud.
 - Top Shelf "Tiếp tục xem" trên tvOS.
 - Kết nối Plex / Jellyfin / Emby.
+
+### Trakt
+
+Tạo ứng dụng tại trakt.tv/oauth/applications/new (Redirect URI: `urn:ietf:wg:oauth:2.0:oob`), dán **Client ID** và **Client Secret** vào **Cài đặt ▸ Trakt**, bấm **Kết nối Trakt** rồi nhập mã hiện ra tại trakt.tv/activate. Có thể đặt secret `TRAKT_CLIENT_ID` / `TRAKT_CLIENT_SECRET` để CI nhúng sẵn (bản build công khai sẽ chứa cặp khoá này).
+
+### OpenSubtitles
+
+Lấy API key miễn phí tại opensubtitles.com ▸ Profile ▸ API Consumers, nhập vào **Cài đặt ▸ Phụ đề trực tuyến** (tuỳ chọn thêm tài khoản để tải nhiều hơn mỗi ngày). Trong trình phát: bảng **Phụ đề ▸ Tìm trên OpenSubtitles…** — tìm theo hash của tệp (khớp đúng bản) và tên phim. Có thể đặt secret `OPENSUBTITLES_API_KEY` để CI nhúng sẵn khoá.
 
 ### TMDb
 
@@ -104,7 +111,7 @@ XT-Player/
 │   └── Services/
 │       ├── LocalDatabase/          # SwiftData: MediaEntry, MediaServer, LibraryItem/File/Folder
 │       ├── Settings/               # AppSettings, Keychain
-│       └── TraktSync/              # (sau)
+│       └── TraktSync/              # Trakt: đăng nhập mã thiết bị, scrobble, đồng bộ đã xem & điểm xem tiếp
 └── Tests/XTPlayerTests/            # Unit test (chạy trên CI)
 ```
 
@@ -130,7 +137,7 @@ Mở **Cài đặt ▸ Nhật ký trình phát** (hoặc nút ⓘ trong player �
 - **Dolby Vision** được render bởi libplacebo (đọc RPU, tone-map chính xác) và xuất ra dưới dạng HDR10/PQ — TV không bật chế độ "Dolby Vision" như với AVPlayer.
 - Nếu cần DV "thật" + Atmos qua Dolby MAT trên Apple TV, có thể cân nhắc thêm backend [AetherEngine](https://github.com/superuser404notfound/AetherEngine) (FFmpeg demux + VideoToolbox + AVPlayer, LGPL) song song với libmpv ở giai đoạn sau.
 - SMB đi qua cầu `xtsmb://` của app (SMBClient, MIT), nên vẫn giữ được MPVKit bản LGPL. NFS chưa hỗ trợ.
-- Trên tvOS, thư viện được lưu trong thư mục Caches (giới hạn của tvOS). Nếu hệ thống dọn bộ nhớ thì quét lại; điểm xem dở sẽ được giữ bền vững khi có đồng bộ Trakt hoặc iCloud.
+- Trên tvOS, thư viện được lưu trong thư mục Caches (giới hạn của tvOS). Nếu hệ thống dọn bộ nhớ thì quét lại; nối Trakt để điểm xem dở và trạng thái đã xem được giữ trên Trakt.
 - **AirPlay** gửi tệp gốc cho TV (TV tự kéo dữ liệu từ máy bạn qua mạng LAN, không transcode), nên chỉ phát được định dạng AVPlayer hỗ trợ: MP4 / MOV / M4V với H.264 hoặc HEVC (AV1 chỉ trên TV có giải mã AV1). MKV và các định dạng khác: dùng *Phản chiếu màn hình*. Máy và TV phải cùng mạng.
 - **Cập nhật trong app** dựa trên GitHub Releases (tạo bằng tag `v*`). Bản Mac là app sandbox nên không tự thay chính nó: app tải .dmg và mở bộ cài, bạn kéo vào Applications.
 
@@ -141,8 +148,9 @@ Mở **Cài đặt ▸ Nhật ký trình phát** (hoặc nút ⓘ trong player �
 - [x] **v0.2.1**: Logo mới, giao diện kiểu Infuse (thanh bên, banner, bảng track/thông tin), sửa co giãn video & toàn màn hình trên Mac, sửa/chẩn đoán âm thanh
 - [x] **v0.2.2**: Stream SMB đa kết nối (hết buffer liên tục với MP4 không xen kẽ), ảnh bìa từ khung hình, AirPlay, kiểm tra & cài bản cập nhật trong app
 - [x] **v0.2.3**: macOS chỉnh được âm lượng khi bật Bitstream HDMI (chỉ dùng chế độ độc quyền lúc thật sự bitstream)
+- [x] **v0.2.4**: Trakt.tv (scrobble, đã xem, điểm xem tiếp giữa các thiết bị), ảnh xem trước khi tua, phụ đề OpenSubtitles, thời lượng / độ phân giải cho phim không có trên TMDb
 - [ ] **v0.3**: Engine AVPlayer cho Dolby Vision và Atmos (Apple TV), song song với libmpv
-- [ ] **v0.4**: OpenSubtitles, scrub thumbnails, Top Shelf
-- [ ] **v0.5**: Trakt.tv sync, iCloud
+- [ ] **v0.4**: Top Shelf (tvOS), Jellyfin / Emby / Plex
+- [ ] **v0.5**: iCloud
 - [ ] **v1.0**: Bản ổn định tvOS / iOS / macOS
 - [ ] **v2.0**: Android TV và Tablet (Jetpack Compose + libmpv-android)

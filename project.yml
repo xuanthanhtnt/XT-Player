@@ -13,7 +13,7 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "0.2.3"
+    MARKETING_VERSION: "0.2.4"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
     PRODUCT_NAME: XTPlayer
@@ -24,6 +24,9 @@ settings:
     GENERATE_INFOPLIST_FILE: YES
     INFOPLIST_FILE: Config/Info.plist
     TMDB_API_KEY: ""
+    OPENSUBTITLES_API_KEY: ""
+    TRAKT_CLIENT_ID: ""
+    TRAKT_CLIENT_SECRET: ""
     INFOPLIST_KEY_CFBundleDisplayName: XT-Player
     INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.entertainment
     INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO

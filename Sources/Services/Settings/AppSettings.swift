@@ -16,6 +16,7 @@ enum AppSettings {
     static let subtitlePosition = "subtitles.position"
     static let subtitleBackground = "subtitles.background"
     static let metadataLanguage = "library.language"
+    static let openSubtitlesUser = "opensubtitles.username"
 
     static func registerDefaults() {
         #if os(macOS)
@@ -41,6 +42,30 @@ enum AppSettings {
     }
 
     static var defaults: UserDefaults { .standard }
+
+    /// The Trakt API application (client id + secret): user setting first, then the build-time pair
+    /// (CI secrets TRAKT_CLIENT_ID / TRAKT_CLIENT_SECRET).
+    static var traktClient: (id: String, secret: String)? {
+        if let id = Keychain.get(account: "trakt.clientID"), !id.isEmpty,
+           let secret = Keychain.get(account: "trakt.clientSecret"), !secret.isEmpty {
+            return (id, secret)
+        }
+        if let id = Bundle.main.object(forInfoDictionaryKey: "XTTraktClientID") as? String, !id.isEmpty, !id.hasPrefix("$("),
+           let secret = Bundle.main.object(forInfoDictionaryKey: "XTTraktClientSecret") as? String, !secret.isEmpty, !secret.hasPrefix("$(") {
+            return (id, secret)
+        }
+        return nil
+    }
+
+    /// OpenSubtitles.com API key: user setting first, then the build-time key (CI secret OPENSUBTITLES_API_KEY).
+    static var openSubtitlesKey: String? {
+        if let user = Keychain.get(account: "opensubtitles"), !user.isEmpty { return user }
+        if let built = Bundle.main.object(forInfoDictionaryKey: "XTOpenSubtitlesAPIKey") as? String,
+           !built.isEmpty, !built.hasPrefix("$(") {
+            return built
+        }
+        return nil
+    }
 
     /// TMDb v3 API key or v4 read-access token: user setting first, then the build-time key (CI secret).
     static var tmdbCredential: String? {

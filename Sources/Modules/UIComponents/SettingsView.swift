@@ -19,6 +19,10 @@ struct SettingsView: View {
     @AppStorage(AppSettings.subtitleBackground) private var subtitleBackground = false
     @AppStorage(AppSettings.metadataLanguage) private var metadataLanguage = "vi-VN"
     @State private var tmdbKey = ""
+    @State private var openSubtitlesKey = ""
+    @State private var openSubtitlesPassword = ""
+    @State private var openSubtitlesSaved = false
+    @AppStorage(AppSettings.openSubtitlesUser) private var openSubtitlesUser = ""
     @State private var tmdbSaved = false
 
     var body: some View {
@@ -117,6 +121,24 @@ struct SettingsView: View {
                 Text("Nếu video không có tiếng / không phát: mở nhật ký ngay sau khi phát rồi bấm Sao chép để gửi lỗi.")
             }
 
+            Section {
+                SecureField("API key", text: $openSubtitlesKey)
+                TextField("Tài khoản (không bắt buộc)", text: $openSubtitlesUser)
+                    .autocorrectionDisabled()
+                SecureField("Mật khẩu", text: $openSubtitlesPassword)
+                Button(openSubtitlesSaved ? "Đã lưu" : "Lưu") {
+                    Keychain.set(openSubtitlesKey.trimmingCharacters(in: .whitespacesAndNewlines), account: "opensubtitles")
+                    Keychain.set(openSubtitlesPassword, account: "opensubtitles.password")
+                    openSubtitlesSaved = true
+                }
+            } header: {
+                Text("Phụ đề trực tuyến (OpenSubtitles)")
+            } footer: {
+                Text("Lấy API key miễn phí tại opensubtitles.com ▸ Profile ▸ API Consumers. Đăng nhập tài khoản để được tải nhiều phụ đề hơn mỗi ngày. Tìm phụ đề trong trình phát ▸ bảng Phụ đề.")
+            }
+
+            TraktSettingsSection()
+
             UpdateSection()
 
             Section("Giới thiệu") {
@@ -131,8 +153,12 @@ struct SettingsView: View {
         .pageTitle("Cài đặt")
         .onAppear {
             tmdbKey = Keychain.get(account: "tmdb") ?? ""
+            openSubtitlesKey = Keychain.get(account: "opensubtitles") ?? ""
+            openSubtitlesPassword = Keychain.get(account: "opensubtitles.password") ?? ""
         }
         .onChange(of: tmdbKey) { _, _ in tmdbSaved = false }
+        .onChange(of: openSubtitlesKey) { _, _ in openSubtitlesSaved = false }
+        .onChange(of: openSubtitlesPassword) { _, _ in openSubtitlesSaved = false }
     }
 
     private static let cacheChoices = [150, 250, 400, 600, 1024, 2048]

@@ -20,5 +20,13 @@
 	<!-- Optional build-time TMDb key (CI secret TMDB_API_KEY); users can also enter one in Settings. -->
 	<key>XTTMDbAPIKey</key>
 	<string>$(TMDB_API_KEY)</string>
+	<!-- Optional build-time OpenSubtitles.com key (CI secret OPENSUBTITLES_API_KEY), also settable in Settings. -->
+	<key>XTOpenSubtitlesAPIKey</key>
+	<string>$(OPENSUBTITLES_API_KEY)</string>
+	<!-- Optional build-time Trakt API application (CI secrets TRAKT_CLIENT_ID / TRAKT_CLIENT_SECRET). -->
+	<key>XTTraktClientID</key>
+	<string>$(TRAKT_CLIENT_ID)</string>
+	<key>XTTraktClientSecret</key>
+	<string>$(TRAKT_CLIENT_SECRET)</string>
 </dict>
 </plist>

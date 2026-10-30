@@ -165,8 +165,9 @@ final class LibraryScanner: ObservableObject {
                 status = "Tạo ảnh bìa \(index + 1)/\(items.count)…"
                 RemoteCredentialStore.shared.register(server)
                 let location = url.absoluteString
-                let grabbed = await Task.detached(priority: .utility) { FrameGrabber.grab(location, to: output) }.value
-                guard grabbed else { continue }
+                guard let probe = await Task.detached(priority: .utility, operation: { FrameGrabber.grab(location, to: output) }).value
+                else { continue }
+                MediaLibrary.learn(fileKey: file.key, resolution: probe.resolutionLabel, duration: probe.duration, in: context)
             }
             item.posterPath = reference
             item.backdropPath = reference
@@ -184,8 +185,8 @@ final class LibraryScanner: ObservableObject {
             if !FileManager.default.fileExists(atPath: output.path) {
                 RemoteCredentialStore.shared.register(server)
                 let location = entry.urlString
-                let grabbed = await Task.detached(priority: .utility) { FrameGrabber.grab(location, to: output) }.value
-                guard grabbed else { continue }
+                guard await Task.detached(priority: .utility, operation: { FrameGrabber.grab(location, to: output) }).value != nil
+                else { continue }
             }
             entry.artworkPath = reference
             try? context.save()
