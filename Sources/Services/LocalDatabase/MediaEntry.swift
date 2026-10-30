@@ -42,11 +42,15 @@ final class MediaEntry {
 
     /// Where playback should start: resume unless the item was (nearly) finished.
     var resumePosition: Double? {
-        guard position > 30, duration <= 0 || position < duration - 60 else { return nil }
+        guard position > 30, !isWatched else { return nil }
         return position
     }
 
-    var isWatched: Bool { duration > 0 && position >= duration - 60 }
+    /// Finished: the last minute reached, or 90 % (end credits of a film, the outro of a music video).
+    var isWatched: Bool { duration > 0 && (position >= duration - 60 || position >= duration * 0.9) }
+
+    /// Opened and played for a while, finished or not ("Unwatched" leaves these out, like Infuse).
+    var isStarted: Bool { position > 10 || isWatched }
 }
 
 enum MediaLibrary {

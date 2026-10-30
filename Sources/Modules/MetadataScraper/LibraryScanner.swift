@@ -2,13 +2,16 @@ import Foundation
 import SwiftData
 
 /// Walks library folders on a server, recognises movies / episodes from file and folder names,
-/// enriches them from TMDb and upserts `LibraryItem` / `LibraryFile` rows.
+/// enriches them from TMDb (or Trakt when no TMDb key is set) and upserts `LibraryItem` / `LibraryFile` rows.
 @MainActor
 final class LibraryScanner: ObservableObject {
     @Published private(set) var isScanning = false
     @Published private(set) var status = ""
     @Published private(set) var lastError: String?
     private var isGeneratingArtwork = false
+    /// Library item key → Trakt show id, from Trakt matches (episode titles and stills).
+    private var traktShowIDs: [String: Int] = [:]
+    private static let traktIdentifiedKey = "library.traktIdentified"
 
     private static let skippedFolders: Set<String> = [
         "@eadir", "#recycle", "#snapshot", ".snapshots", "$recycle.bin", "system volume information",
@@ -57,6 +60,7 @@ final class LibraryScanner: ObservableObject {
         await fs.close()
 
         let tmdb = TMDbClient.current()
+        let trakt = tmdb == nil ? TraktMetadata.current() : nil
         var showCache: [String: LibraryItem] = [:]
         var movieCache: [String: LibraryItem] = [:]
         var seenKeys = Set<String>()
@@ -73,7 +77,7 @@ final class LibraryScanner: ObservableObject {
                 if let cached = showCache[cacheKey] {
                     item = cached
                 } else {
-                    item = await upsertItem(kind: .show, parsed: parsed, tmdb: tmdb, context: context)
+                    item = await upsertItem(kind: .show, parsed: parsed, tmdb: tmdb, trakt: trakt, context: context)
                     showCache[cacheKey] = item
                 }
             case .movie:
@@ -81,7 +85,7 @@ final class LibraryScanner: ObservableObject {
                 if let cached = movieCache[cacheKey] {
                     item = cached
                 } else {
-                    item = await upsertItem(kind: .movie, parsed: parsed, tmdb: tmdb, context: context)
+                    item = await upsertItem(kind: .movie, parsed: parsed, tmdb: tmdb, trakt: trakt, context: context)
                     movieCache[cacheKey] = item
                 }
             }
@@ -102,27 +106,7 @@ final class LibraryScanner: ObservableObject {
             }
         }
 
-        // Episode titles and stills, one TMDb request per season.
-        if let tmdb {
-            for show in showCache.values {
-                guard let id = show.tmdbID else { continue }
-                let showKey = show.key
-                let files = (try? context.fetch(FetchDescriptor<LibraryFile>(predicate: #Predicate { $0.itemKey == showKey }))) ?? []
-                let seasons = Set(files.compactMap(\.season))
-                for number in seasons.sorted() {
-                    status = "Tải thông tin \(show.title) mùa \(number)…"
-                    guard let season = try? await tmdb.season(show: id, number: number) else { continue }
-                    let byEpisode = Dictionary(season.episodes.map { ($0.episodeNumber, $0) }, uniquingKeysWith: { a, _ in a })
-                    for file in files where file.season == number {
-                        guard let episode = file.episode, let info = byEpisode[episode] else { continue }
-                        file.episodeTitle = info.name
-                        file.episodeOverview = info.overview
-                        file.stillPath = info.stillPath
-                        file.airDate = info.airDate
-                    }
-                }
-            }
-        }
+        await fillEpisodes(of: Array(showCache.values), tmdb: tmdb, trakt: trakt, context: context)
 
         // Files that disappeared from this folder.
         let folderKey = folder.key
@@ -218,14 +202,70 @@ final class LibraryScanner: ObservableObject {
         return nil
     }
 
-    /// Re-fetch TMDb metadata for one item (e.g. after a wrong match or adding a key).
+    /// Re-fetch metadata for one item (e.g. after a wrong match or adding a key).
     func refresh(_ item: LibraryItem, context: ModelContext) async {
-        guard let tmdb = TMDbClient.current() else { return }
-        let parsed = ParsedMediaName(title: item.title, year: item.year, kind: item.kind == .show ? .episode(season: 1, episode: 1) : .movie,
-                                     resolution: nil, dynamicRange: [], audio: [])
+        let tmdb = TMDbClient.current()
+        let trakt = tmdb == nil ? TraktMetadata.current() : nil
+        guard tmdb != nil || trakt != nil else { return }
         item.tmdbID = nil
-        await enrich(item, parsed: parsed, tmdb: tmdb)
+        await enrich(item, parsed: Self.parsed(item), tmdb: tmdb, trakt: trakt)
         try? context.save()
+    }
+
+    /// Without a TMDb key, items scanned earlier (before Trakt recognition existed) are looked up on Trakt
+    /// once, at launch; titles Trakt does not know (concerts, home videos) are not asked about again.
+    func identifyUnmatched(context: ModelContext) async {
+        guard !isScanning, TMDbClient.current() == nil, let trakt = TraktMetadata.current() else { return }
+        var attempted = Set(UserDefaults.standard.stringArray(forKey: Self.traktIdentifiedKey) ?? [])
+        let items = ((try? context.fetch(FetchDescriptor<LibraryItem>())) ?? []).filter { $0.tmdbID == nil && !attempted.contains($0.key) }
+        guard !items.isEmpty else { return }
+        isScanning = true
+        defer { isScanning = false }
+        for (index, item) in items.enumerated() {
+            status = "Nhận diện qua Trakt \(index + 1)/\(items.count)…"
+            await enrich(item, parsed: Self.parsed(item), tmdb: nil, trakt: trakt)
+            attempted.insert(item.key)
+        }
+        UserDefaults.standard.set(Array(attempted), forKey: Self.traktIdentifiedKey)
+        await fillEpisodes(of: items.filter { $0.kind == .show && $0.tmdbID != nil }, tmdb: nil, trakt: trakt, context: context)
+        try? context.save()
+        status = ""
+    }
+
+    private static func parsed(_ item: LibraryItem) -> ParsedMediaName {
+        ParsedMediaName(title: item.title, year: item.year, kind: item.kind == .show ? .episode(season: 1, episode: 1) : .movie,
+                        resolution: nil, dynamicRange: [], audio: [])
+    }
+
+    /// Episode titles, overviews and stills, one request per season.
+    private func fillEpisodes(of shows: [LibraryItem], tmdb: TMDbClient?, trakt: TraktMetadata?, context: ModelContext) async {
+        guard tmdb != nil || trakt != nil else { return }
+        for show in shows {
+            let showKey = show.key
+            let files = (try? context.fetch(FetchDescriptor<LibraryFile>(predicate: #Predicate { $0.itemKey == showKey }))) ?? []
+            let seasons = Set(files.compactMap(\.season))
+            guard !seasons.isEmpty else { continue }
+            var traktID = traktShowIDs[showKey]
+            if traktID == nil, let trakt, let tmdbID = show.tmdbID { traktID = try? await trakt.showID(tmdb: tmdbID) }
+            for number in seasons.sorted() {
+                status = "Tải thông tin \(show.title) mùa \(number)…"
+                var episodes: [Int: (title: String?, overview: String?, still: String?, airDate: String?)] = [:]
+                if let tmdb, let id = show.tmdbID {
+                    guard let season = try? await tmdb.season(show: id, number: number) else { continue }
+                    for info in season.episodes { episodes[info.episodeNumber] = (info.name, info.overview, info.stillPath, info.airDate) }
+                } else if let trakt, let traktID {
+                    guard let season = try? await trakt.season(show: traktID, number: number) else { continue }
+                    for info in season { episodes[info.number] = (info.title, info.overview, info.stillPath, info.airDate) }
+                }
+                for file in files where file.season == number {
+                    guard let episode = file.episode, let info = episodes[episode] else { continue }
+                    file.episodeTitle = info.title
+                    file.episodeOverview = info.overview
+                    file.stillPath = info.still
+                    file.airDate = info.airDate
+                }
+            }
+        }
     }
 
     // MARK: - Recognition
@@ -289,18 +329,54 @@ final class LibraryScanner: ObservableObject {
         return try? context.fetch(d).first
     }
 
-    private func upsertItem(kind: LibraryKind, parsed: ParsedMediaName, tmdb: TMDbClient?, context: ModelContext) async -> LibraryItem {
+    private func upsertItem(kind: LibraryKind, parsed: ParsedMediaName, tmdb: TMDbClient?, trakt: TraktMetadata?, context: ModelContext) async -> LibraryItem {
         let localKey = "local:\(kind.rawValue):\(parsed.title.lowercased())|\(kind == .movie ? parsed.year ?? 0 : 0)"
         var d = FetchDescriptor<LibraryItem>(predicate: #Predicate { $0.key == localKey })
         d.fetchLimit = 1
         if let existing = try? context.fetch(d).first {
-            if existing.tmdbID == nil, let tmdb { await enrich(existing, parsed: parsed, tmdb: tmdb) }
+            // A TMDb key added later replaces what Trakt filled in (TMDb has richer artwork and cast).
+            if existing.tmdbID == nil || (tmdb != nil && TraktMetadata.isTraktImage(existing.posterPath)) {
+                await enrich(existing, parsed: parsed, tmdb: tmdb, trakt: trakt)
+            }
             return existing
         }
         let item = LibraryItem(key: localKey, kind: kind, title: parsed.title, year: parsed.year)
         context.insert(item)
-        if let tmdb { await enrich(item, parsed: parsed, tmdb: tmdb) }
+        await enrich(item, parsed: parsed, tmdb: tmdb, trakt: trakt)
         return item
+    }
+
+    private func enrich(_ item: LibraryItem, parsed: ParsedMediaName, tmdb: TMDbClient?, trakt: TraktMetadata?) async {
+        if let tmdb {
+            await enrich(item, parsed: parsed, tmdb: tmdb)
+        } else if let trakt {
+            await enrich(item, parsed: parsed, trakt: trakt)
+        }
+    }
+
+    private func enrich(_ item: LibraryItem, parsed: ParsedMediaName, trakt: TraktMetadata) async {
+        do {
+            let found = item.kind == .movie
+                ? try await trakt.movie(title: parsed.title, year: parsed.year)
+                : try await trakt.show(title: parsed.title, year: nil)
+            guard let details = found else { return }
+            if item.kind == .show { traktShowIDs[item.key] = details.traktID }
+            item.tmdbID = details.tmdbID
+            item.title = details.title.isEmpty ? item.title : details.title
+            item.originalTitle = details.originalTitle
+            item.year = details.year ?? item.year
+            item.overview = details.overview
+            item.tagline = details.tagline
+            item.posterPath = details.posterPath
+            item.backdropPath = details.backdropPath
+            item.rating = details.rating
+            item.runtime = details.runtime
+            item.genres = details.genres
+            item.cast = details.cast
+            item.updatedAt = .now
+        } catch {
+            lastError = "Trakt: \(error.localizedDescription)"
+        }
     }
 
     private func enrich(_ item: LibraryItem, parsed: ParsedMediaName, tmdb: TMDbClient) async {

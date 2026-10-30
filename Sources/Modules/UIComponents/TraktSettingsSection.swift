@@ -66,10 +66,14 @@ struct TraktSettingsSection: View {
             if !trakt.status.isEmpty {
                 Text(trakt.status).font(.footnote).foregroundStyle(.secondary)
             }
+            if let lastSync = trakt.lastSync {
+                Text("Đồng bộ lần cuối: \(lastSync.formatted(date: .omitted, time: .shortened)) · tự đồng bộ khi mở app, khi đóng trình phát và mỗi 15 phút")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
         } header: {
             Text("Trakt")
         } footer: {
-            Text("Đồng bộ đã xem và điểm xem tiếp giữa Mac, iPhone, Apple TV (và Infuse nếu cũng nối Trakt). Lần đầu: tạo ứng dụng tại trakt.tv/oauth/applications/new — App type: Development, Redirect URIs: http://localhost — rồi dán Mã khách hàng (Client ID) ở trên. Ứng dụng Trakt mới không có Client Secret: để trống ô đó.")
+            Text("Đồng bộ đã xem và điểm xem tiếp giữa Mac, iPhone, Apple TV (và Infuse nếu cũng nối Trakt). Chỉ phim và tập phim có trên Trakt mới đồng bộ được — video ca nhạc, concert, video gia đình thì không. Lỗi gửi lên Trakt (nếu có) nằm trong Nhật ký trình phát (dòng [trakt]). Bản tự build không kèm Client ID: tạo ứng dụng tại trakt.tv/oauth/applications/new (Redirect URI: http://localhost) rồi dán Client ID ở trên.")
         }
         .onAppear {
             clientID = Keychain.get(account: "trakt.clientID") ?? ""

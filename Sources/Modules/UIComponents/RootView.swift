@@ -53,6 +53,7 @@ extension Notification.Name {
 
 struct RootView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.scenePhase) private var scenePhase
     @State private var session: PlaybackSession?
     @State private var section: AppSection = .home
     @State private var showImporter = false
@@ -65,6 +66,8 @@ struct RootView: View {
     /// Size of the library when playback started: it keeps it while the window takes the video's shape.
     @State private var librarySize: CGSize = .zero
     @State private var frozenLibrarySize: CGSize?
+    /// Navigation inside each sidebar section, kept while another section is shown.
+    @State private var paths: [AppSection: [Route]] = [:]
     #endif
 
     var body: some View {
@@ -75,11 +78,30 @@ struct RootView: View {
             .environmentObject(scanner)
             // A file just played may have no picture yet (opened from a share or from this device).
             .onChange(of: session == nil) { _, closed in
-                if closed { Task { await scanner.generateMissingArtwork(context: context) } }
+                guard closed else { return }
+                Task {
+                    await scanner.generateMissingArtwork(context: context)
+                    // Give Trakt a moment to file the stop scrobble, then pull what changed meanwhile.
+                    try? await Task.sleep(for: .seconds(3))
+                    await TraktService.shared.sync(context: context)
+                }
+            }
+            // Watched elsewhere (Infuse, Apple TV, phone) while this app sat in the background.
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { Task { await TraktService.shared.syncIfStale(context: context) } }
+            }
+            .onChange(of: scanner.isScanning) { _, scanning in
+                // New library files may be ones Trakt already has as watched.
+                if !scanning { Task { await TraktService.shared.sync(context: context) } }
             }
             .task {
+                await scanner.identifyUnmatched(context: context)
                 await TraktService.shared.sync(context: context)
                 await scanner.generateMissingArtwork(context: context)
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(900))
+                    if session == nil { await TraktService.shared.syncIfStale(context: context, interval: 600) }
+                }
             }
             #if !os(tvOS)
             .fileImporter(isPresented: $showImporter, allowedContentTypes: Self.playableTypes, allowsMultipleSelection: false) { result in
@@ -150,61 +172,84 @@ struct RootView: View {
 
     #if os(macOS)
     /// Infuse's sidebar: Search, Home, then "Thư viện" (library filters) and "Tệp" (servers and the
-    /// library folders, opened straight in the browser), then Settings.
+    /// library folders, opened straight in the browser), with Settings pinned to the bottom.
+    ///
+    /// A split view rather than a sidebar TabView: a TabView cannot pin a tab to the bottom of its sidebar
+    /// (a tab hidden from the list shows an empty page). Each section remembers where it was navigated to.
     private var sections: some View {
-        TabView(selection: $section) {
-            Tab("Tìm kiếm", systemImage: "magnifyingglass", value: AppSection.search) {
-                NavigationStack { LibrarySearchView().libraryRoutes() }
-            }
-            Tab("Trang chủ", systemImage: "house", value: AppSection.home) {
-                NavigationStack { HomeView().libraryRoutes() }
-            }
-            TabSection("Thư viện") {
-                Tab("Phim", systemImage: "film", value: AppSection.movies) {
-                    NavigationStack { LibraryGridView(filter: .movies).libraryRoutes() }
+        NavigationSplitView {
+            List(selection: sidebarSelection) {
+                sidebarRow("Tìm kiếm", "magnifyingglass", .search)
+                sidebarRow("Trang chủ", "house", .home)
+                Section("Thư viện") {
+                    sidebarRow("Phim", "film", .movies)
+                    sidebarRow("TV Shows", "tv", .shows)
+                    sidebarRow("Mới thêm", "clock.arrow.circlepath", .recent)
+                    sidebarRow("Chưa xem", "eye.slash", .unwatched)
+                    sidebarRow("Điểm cao", "star", .topRated)
+                    sidebarRow("Thể loại", "theatermasks", .genres)
                 }
-                Tab("TV Shows", systemImage: "tv", value: AppSection.shows) {
-                    NavigationStack { LibraryGridView(filter: .shows).libraryRoutes() }
-                }
-                Tab("Mới thêm", systemImage: "clock.arrow.circlepath", value: AppSection.recent) {
-                    NavigationStack { LibraryGridView(filter: .recent).libraryRoutes() }
-                }
-                Tab("Chưa xem", systemImage: "eye.slash", value: AppSection.unwatched) {
-                    NavigationStack { LibraryGridView(filter: .unwatched).libraryRoutes() }
-                }
-                Tab("Điểm cao", systemImage: "star", value: AppSection.topRated) {
-                    NavigationStack { LibraryGridView(filter: .topRated).libraryRoutes() }
-                }
-                Tab("Thể loại", systemImage: "theatermasks", value: AppSection.genres) {
-                    NavigationStack { GenresView().libraryRoutes() }
-                }
-            }
-            TabSection("Tệp") {
-                ForEach(servers) { server in
-                    Tab(server.name, systemImage: server.kind.icon, value: AppSection.server(server.id)) {
-                        NavigationStack { BrowserView(serverID: server.id, path: "", title: server.name).libraryRoutes() }
+                Section("Tệp") {
+                    ForEach(servers) { server in
+                        sidebarRow(server.name, server.kind.icon, .server(server.id))
                     }
-                }
-                ForEach(folders) { folder in
-                    Tab(folder.name, systemImage: "folder", value: AppSection.folder(folder.key)) {
-                        NavigationStack { BrowserView(serverID: folder.serverID, path: folder.path, title: folder.name).libraryRoutes() }
+                    ForEach(folders) { folder in
+                        sidebarRow(folder.name, "folder", .folder(folder.key))
                     }
-                }
-                Tab("Nguồn", systemImage: "externaldrive.badge.plus", value: AppSection.sources) {
-                    NavigationStack { SourcesView().libraryRoutes() }
+                    sidebarRow("Nguồn", "externaldrive.badge.plus", .sources)
                 }
             }
-            Tab("Cài đặt", systemImage: "gearshape", value: AppSection.settings) {
-                NavigationStack { SettingsView().libraryRoutes() }
+            .listStyle(.sidebar)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                SidebarSettingsButton(selected: section == .settings) { section = .settings }
             }
+            .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 300)
+        } detail: {
+            let current = section
+            NavigationStack(path: Binding(get: { paths[current] ?? [] }, set: { paths[current] = $0 })) {
+                page(for: current).libraryRoutes()
+            }
+            .id(current)
         }
-        .tabViewStyle(.sidebarAdaptable)
         .onChange(of: servers.map(\.id)) { _, ids in
             // A removed server or folder must not leave the sidebar pointing at nothing.
             if case let .server(id) = section, !ids.contains(id) { section = .sources }
         }
         .onChange(of: folders.map(\.key)) { _, keys in
             if case let .folder(key) = section, !keys.contains(key) { section = .sources }
+        }
+    }
+
+    /// The list selects every section except Settings, which has its own row below the list.
+    private var sidebarSelection: Binding<AppSection?> {
+        Binding(get: { section == .settings ? nil : section }, set: { if let value = $0 { section = value } })
+    }
+
+    private func sidebarRow(_ title: String, _ icon: String, _ value: AppSection) -> some View {
+        Label(title, systemImage: icon).tag(value)
+    }
+
+    @ViewBuilder
+    private func page(for section: AppSection) -> some View {
+        switch section {
+        case .search: LibrarySearchView()
+        case .home: HomeView()
+        case .movies: LibraryGridView(filter: .movies)
+        case .shows: LibraryGridView(filter: .shows)
+        case .recent: LibraryGridView(filter: .recent)
+        case .unwatched: LibraryGridView(filter: .unwatched)
+        case .topRated: LibraryGridView(filter: .topRated)
+        case .genres: GenresView()
+        case .sources: SourcesView()
+        case .settings: SettingsView()
+        case let .server(id):
+            if let server = servers.first(where: { $0.id == id }) {
+                BrowserView(serverID: server.id, path: "", title: server.name)
+            }
+        case let .folder(key):
+            if let folder = folders.first(where: { $0.key == key }) {
+                BrowserView(serverID: folder.serverID, path: folder.path, title: folder.name)
+            }
         }
     }
     #else
@@ -238,6 +283,37 @@ struct RootView: View {
         return types
     }()
 }
+
+#if os(macOS)
+/// Settings row at the bottom of the Mac sidebar, drawn like a sidebar row (⌘, opens it too).
+private struct SidebarSettingsButton: View {
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider().opacity(0.5)
+            Button(action: action) {
+                HStack(spacing: 8) {
+                    Image(systemName: "gearshape")
+                        .foregroundStyle(selected ? AnyShapeStyle(Color.primary) : AnyShapeStyle(.tint))
+                        .frame(width: 20)
+                    Text("Cài đặt")
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(selected ? Color.primary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(",", modifiers: .command)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+        }
+    }
+}
+#endif
 
 private struct LibraryRoutes: ViewModifier {
     func body(content: Content) -> some View {

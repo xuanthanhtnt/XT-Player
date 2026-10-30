@@ -18,6 +18,12 @@ struct SettingsView: View {
     @AppStorage(AppSettings.subtitlePosition) private var subtitlePosition = 100
     @AppStorage(AppSettings.subtitleBackground) private var subtitleBackground = false
     @AppStorage(AppSettings.metadataLanguage) private var metadataLanguage = "vi-VN"
+    @AppStorage(AppSettings.hardwareDecoding) private var hardwareDecoding = true
+    @AppStorage(AppSettings.pictureQuality) private var pictureQuality = PictureQuality.platformDefault.rawValue
+    @AppStorage(AppSettings.motionSmoothing) private var motionSmoothing = false
+    @AppStorage(AppSettings.matchSampleRate) private var matchSampleRate = false
+    @AppStorage(AppSettings.nightMode) private var nightMode = false
+    @AppStorage(AppSettings.dialogBoost) private var dialogBoost = false
     @State private var tmdbKey = ""
     @State private var openSubtitlesKey = ""
     @State private var openSubtitlesPassword = ""
@@ -28,12 +34,26 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
+                Picker("Chất lượng hình ảnh", selection: $pictureQuality) {
+                    ForEach(PictureQuality.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                Toggle("Giải mã phần cứng (VideoToolbox)", isOn: $hardwareDecoding)
                 Toggle("HDR passthrough (HDR10 / HLG / Dolby Vision → PQ)", isOn: $hdrPassthrough)
+                #if !os(tvOS)
+                Toggle("Chuyển động mượt (khử rung phim 24p)", isOn: $motionSmoothing)
+                #endif
                 Picker("Khử xen kẽ (deinterlace)", selection: $deinterlace) {
                     Text("Tự động").tag("auto")
                     Text("Luôn bật").tag("yes")
                     Text("Tắt").tag("no")
                 }
+            } header: {
+                Text("Hình ảnh")
+            } footer: {
+                Text(Self.videoFooter(PictureQuality(rawValue: pictureQuality) ?? .platformDefault))
+            }
+
+            Section {
                 Picker("Bộ đệm RAM", selection: $cacheMegabytes) {
                     ForEach(Self.cacheChoices, id: \.self) { Text("\($0) MB").tag($0) }
                 }
@@ -51,14 +71,19 @@ struct SettingsView: View {
             Section {
                 TextField("Ngôn ngữ âm thanh ưu tiên (vd: vie,eng)", text: $audioLanguages)
                     .autocorrectionDisabled()
+                Toggle("Tăng thoại (nghe rõ lời nói)", isOn: $dialogBoost)
+                Toggle("Chế độ ban đêm (nén dải động)", isOn: $nightMode)
                 #if os(macOS)
+                Toggle("Khớp tần số lấy mẫu với DAC / loa ngoài", isOn: $matchSampleRate)
                 Toggle("Bitstream TrueHD / DTS-HD / E-AC3 qua HDMI", isOn: $audioPassthrough)
                 #endif
             } header: {
                 Text("Âm thanh")
             } footer: {
                 #if os(macOS)
-                Text("Chỉ cần khi Mac nối ampli / receiver qua HDMI. Lúc bitstream, âm lượng chỉnh trên ampli. Loa máy, tai nghe, AirPlay luôn phát bình thường và chỉnh âm lượng được.")
+                Text("Tăng thoại: kênh giữa to hơn, kênh vòm và siêu trầm nhỏ lại. Ban đêm: dùng thông tin nén dải động có sẵn trong âm thanh Dolby (AC3 / E-AC3) để tiếng nổ không quá to. Khớp tần số: đổi tần số của thiết bị theo file (44,1 / 48 / 96 kHz), không để macOS lấy mẫu lại. Bitstream chỉ cần khi Mac nối ampli qua HDMI; lúc bitstream, âm lượng chỉnh trên ampli và các xử lý trên không áp dụng.")
+                #else
+                Text("Tăng thoại: kênh giữa to hơn, kênh vòm và siêu trầm nhỏ lại. Ban đêm: dùng thông tin nén dải động có sẵn trong âm thanh Dolby (AC3 / E-AC3) để tiếng nổ không quá to.")
                 #endif
             }
 
@@ -159,6 +184,14 @@ struct SettingsView: View {
         .onChange(of: tmdbKey) { _, _ in tmdbSaved = false }
         .onChange(of: openSubtitlesKey) { _, _ in openSubtitlesSaved = false }
         .onChange(of: openSubtitlesPassword) { _, _ in openSubtitlesSaved = false }
+    }
+
+    private static func videoFooter(_ quality: PictureQuality) -> String {
+        var text = "\(quality.label): \(quality.detail). Giải mã phần cứng tiết kiệm pin và CPU; tắt nếu video bị nhiễu hình hoặc sai màu (máy tự chuyển sang giải mã phần mềm với định dạng chip không hỗ trợ, như AV1 trên chip cũ)."
+        #if !os(tvOS)
+        text += " Chuyển động mượt: khớp từng khung với tần số màn hình và hoà trộn khung ở chỗ chuyển tiếp, hết giật khi phim 24 hình/giây chạy trên màn 60 Hz — không tạo hiệu ứng “phim truyền hình”."
+        #endif
+        return text
     }
 
     private static let cacheChoices = [150, 250, 400, 600, 1024, 2048]

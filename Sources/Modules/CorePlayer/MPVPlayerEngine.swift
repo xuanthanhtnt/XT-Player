@@ -149,6 +149,15 @@ struct PlayerOptions {
     var subtitleScale = 1.0
     var subtitlePosition = 100
     var subtitleBackground = false
+    /// VideoToolbox decoding; mpv falls back to software by itself for codecs the chip cannot decode.
+    var hardwareDecoding = true
+    var pictureQuality = PictureQuality.platformDefault
+    /// Display-synchronised playback with frame blending: no 24p judder on a 60 Hz screen.
+    var motionSmoothing = false
+    /// macOS: switch the output device to the file's sample rate instead of letting the system mixer resample.
+    var matchSampleRate = false
+    var nightMode = false
+    var dialogBoost = false
 
     static var standard: PlayerOptions {
         #if os(macOS)
@@ -174,7 +183,93 @@ struct PlayerOptions {
         let position = d.integer(forKey: AppSettings.subtitlePosition)
         if position > 0 { o.subtitlePosition = position }
         o.subtitleBackground = d.bool(forKey: AppSettings.subtitleBackground)
+        o.hardwareDecoding = d.object(forKey: AppSettings.hardwareDecoding) as? Bool ?? true
+        o.pictureQuality = PictureQuality(rawValue: d.string(forKey: AppSettings.pictureQuality) ?? "") ?? .platformDefault
+        o.motionSmoothing = d.bool(forKey: AppSettings.motionSmoothing)
+        o.matchSampleRate = d.bool(forKey: AppSettings.matchSampleRate)
+        o.nightMode = d.bool(forKey: AppSettings.nightMode)
+        o.dialogBoost = d.bool(forKey: AppSettings.dialogBoost)
         return o
+    }
+}
+
+/// How hard libplacebo works on the picture: scaling, debanding and HDR tone-mapping.
+enum PictureQuality: String, CaseIterable, Identifiable {
+    case balanced, high, max
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .balanced: return "Cân bằng"
+        case .high: return "Cao"
+        case .max: return "Tối đa"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .balanced: return "Nhẹ máy, tiết kiệm pin"
+        case .high: return "Phóng to EWA Lanczos, khử dải màu, tone-map HDR chi tiết"
+        case .max: return "Phóng to Lanczos 4 nhánh cho cả màu — cần GPU khoẻ"
+        }
+    }
+
+    /// Renderer options a preset may change; the rest keep libmpv's defaults.
+    static let keys = ["scale", "cscale", "deband", "hdr-peak-percentile", "hdr-contrast-recovery"]
+
+    /// mpv's built-in "high-quality" profile plus debanding (8-bit web and streaming encodes band in skies
+    /// and dark scenes); "max" also upsamples chroma with the EWA scaler.
+    var values: [String: String] {
+        switch self {
+        case .balanced:
+            return [:]
+        case .high:
+            return ["scale": "ewa_lanczossharp", "deband": "yes", "hdr-peak-percentile": "99.995", "hdr-contrast-recovery": "0.30"]
+        case .max:
+            return ["scale": "ewa_lanczos4sharpest", "cscale": "ewa_lanczossharp", "deband": "yes",
+                    "hdr-peak-percentile": "99.995", "hdr-contrast-recovery": "0.30"]
+        }
+    }
+
+    /// Apple silicon Macs have GPU to spare; iPhone, iPad and Apple TV keep the battery and the 4K frame rate.
+    static var platformDefault: PictureQuality {
+        #if os(macOS)
+        return .high
+        #else
+        return .balanced
+        #endif
+    }
+}
+
+/// Night mode and dialogue boost as an FFmpeg filter chain. MPVKit's FFmpeg has no compressor filters
+/// (dynaudnorm, acompressor, loudnorm), so dynamics come from the AC-3 / E-AC-3 decoder's own DRC metadata
+/// and the rest is remixing: centre (dialogue) up, LFE and surrounds down.
+enum AudioEnhancement {
+    static func filter(night: Bool, dialog: Bool, source: Int, output: Int) -> String {
+        guard night || dialog, source > 0, output > 0 else { return "" }
+        if source <= 2 {
+            // Stereo has no centre channel: raise what both sides share (mid) against what differs (side).
+            return dialog && source == 2 ? "lavfi=[pan=stereo|c0<1.4*c0+0.4*c1|c1<0.4*c0+1.4*c1]" : ""
+        }
+        let centre = dialog ? 1.2 : 1.0
+        let surround = dialog ? 0.35 : 0.5
+        if output <= 2 {
+            // Speakers / headphones: a dialogue-first downmix instead of the standard -3 dB centre.
+            return String(format: "lavfi=[aresample=out_chlayout=stereo:clev=%.2f:slev=%.2f:lfe_mix_level=0]", centre, surround)
+        }
+        // Receiver / TV: keep the layout, lower everything around the centre channel.
+        let wide = source >= 8 && output >= 8
+        let side = dialog ? 0.6 : 0.75
+        let front = dialog ? 0.7 : 1.0
+        var gains = [
+            String(format: "FL=%.2f*FL", front), String(format: "FR=%.2f*FR", front), "FC=FC",
+            String(format: "LFE=%.2f*LFE", night ? 0.5 : 0.7),
+            String(format: "BL=%.2f*BL", side), String(format: "BR=%.2f*BR", side),
+        ]
+        if wide { gains += [String(format: "SL=%.2f*SL", side), String(format: "SR=%.2f*SR", side)] }
+        let layout = wide ? "7.1" : "5.1"
+        return "lavfi=[aresample=out_chlayout=\(layout),pan=\(layout)|\(gains.joined(separator: "|"))]"
     }
 }
 
@@ -258,6 +353,12 @@ final class MPVPlayerEngine: ObservableObject {
     @Published private(set) var subtitleTracks: [MediaTrack] = []
     @Published private(set) var subtitleDelay: Double = 0
     @Published private(set) var nightMode = false
+    @Published private(set) var dialogBoost = false
+    @Published private(set) var hardwareDecoding = true
+    @Published private(set) var pictureQuality = PictureQuality.platformDefault
+    @Published private(set) var motionSmoothing = false
+    /// Frames dropped because decoding or rendering could not keep up (a hint to lower the picture quality).
+    @Published private(set) var droppedFrames = 0
     @Published private(set) var hdrOutputActive = false
     @Published private(set) var chapters: [Chapter] = []
     @Published private(set) var currentChapter = -1
@@ -285,6 +386,15 @@ final class MPVPlayerEngine: ObservableObject {
     private var isPaused = false                // queue only
     private var reachedEOF = false              // queue only
     private var pendingSubtitles: [String] = [] // queue only: sidecar subtitles for the file being loaded
+    private var rendererDefaults: [String: String] = [:] // queue only: libmpv's own values of PictureQuality.keys
+    private var wantsNightMode = false          // queue only
+    private var wantsDialogBoost = false        // queue only
+    private var sourceChannels = 0              // queue only
+    private var outputChannels = 0              // queue only
+    private var appliedAudioFilter = ""         // queue only
+    private var appliedAC3DRC = "0"             // queue only
+    private var decoderDrops = 0                // queue only
+    private var outputDrops = 0                 // queue only
 
     private var attached = false                // main only
     private var pendingLoad: (location: String, start: Double?, subtitles: [String])?
@@ -297,6 +407,11 @@ final class MPVPlayerEngine: ObservableObject {
 
     init(options: PlayerOptions = .fromSettings()) {
         self.options = options
+        nightMode = options.nightMode
+        dialogBoost = options.dialogBoost
+        hardwareDecoding = options.hardwareDecoding
+        pictureQuality = options.pictureQuality
+        motionSmoothing = options.motionSmoothing
     }
 
     deinit {
@@ -318,10 +433,11 @@ final class MPVPlayerEngine: ObservableObject {
         let wid = Int64(Int(bitPattern: Unmanaged.passUnretained(view.metalLayer).toOpaque()))
         let hdr = options.hdrPassthrough && Self.displaySupportsHDR(view)
         hdrOutputActive = hdr
+        let refreshRate = Self.displayRefreshRate(view)
         #if os(iOS) || os(tvOS)
         AudioSessionConfigurator.activateForMoviePlayback()
         #endif
-        queue.async { self.createCore(wid: wid, hdr: hdr) }
+        queue.async { self.createCore(wid: wid, hdr: hdr, refreshRate: refreshRate) }
         observeAppLifecycle()
         if let pending = pendingLoad {
             pendingLoad = nil
@@ -450,15 +566,91 @@ final class MPVPlayerEngine: ObservableObject {
         queue.async { self.command(["add", "chapter", "\(step)"]) }
     }
 
-    /// Night mode: dynamic range compression + loudness normalisation (FFmpeg dynaudnorm).
+    /// Night mode: the Dolby decoder's dynamic range compression, less LFE and surround.
     func setNightMode(_ enabled: Bool) {
         nightMode = enabled
-        setProperty("af", enabled ? "lavfi=[dynaudnorm=f=250:g=31:p=0.6:m=8]" : "")
+        UserDefaults.standard.set(enabled, forKey: AppSettings.nightMode)
+        queue.async {
+            self.wantsNightMode = enabled
+            if let mpv = self.handle { self.applyAudioEnhancements(mpv) }
+        }
+    }
+
+    /// Dialogue boost: centre channel (or the stereo mid) up against everything else.
+    func setDialogBoost(_ enabled: Bool) {
+        dialogBoost = enabled
+        UserDefaults.standard.set(enabled, forKey: AppSettings.dialogBoost)
+        queue.async {
+            self.wantsDialogBoost = enabled
+            if let mpv = self.handle { self.applyAudioEnhancements(mpv) }
+        }
+    }
+
+    /// VideoToolbox on / off for the file that is playing (mpv re-creates the decoder) and the next ones.
+    func setHardwareDecoding(_ enabled: Bool) {
+        hardwareDecoding = enabled
+        UserDefaults.standard.set(enabled, forKey: AppSettings.hardwareDecoding)
+        setProperty("hwdec", enabled ? "videotoolbox" : "no")
+    }
+
+    func setPictureQuality(_ quality: PictureQuality) {
+        pictureQuality = quality
+        UserDefaults.standard.set(quality.rawValue, forKey: AppSettings.pictureQuality)
+        queue.async {
+            if let mpv = self.handle { self.applyPictureQuality(quality, mpv) }
+        }
+    }
+
+    func setMotionSmoothing(_ enabled: Bool) {
+        motionSmoothing = enabled
+        UserDefaults.standard.set(enabled, forKey: AppSettings.motionSmoothing)
+        queue.async {
+            guard let mpv = self.handle else { return }
+            for (name, value) in Self.motionOptions(enabled) { mpv_set_property_string(mpv, name, value) }
+        }
+    }
+
+    /// Display-resample times every frame to the screen's refresh and re-times audio by the tiny difference;
+    /// "oversample" blends only the frame that straddles a refresh, so motion is even without the soap-opera
+    /// look of motion interpolation.
+    private static func motionOptions(_ enabled: Bool) -> [(String, String)] {
+        enabled ? [("video-sync", "display-resample"), ("interpolation", "yes"), ("tscale", "oversample")]
+                : [("video-sync", "audio"), ("interpolation", "no")]
+    }
+
+    private func applyPictureQuality(_ quality: PictureQuality, _ mpv: OpaquePointer) {
+        let values = quality.values
+        for key in PictureQuality.keys {
+            guard let value = values[key] ?? rendererDefaults[key], !value.isEmpty else { continue }
+            let status = mpv_set_property_string(mpv, key, value)
+            if status < 0 {
+                MPVLogBuffer.shared.append("[xt] \(key)=\(value): \(String(cString: mpv_error_string(status)))")
+            }
+        }
+    }
+
+    /// Rebuilds the audio filter chain for the current source / output layout. Must be called on `queue`.
+    private func applyAudioEnhancements(_ mpv: OpaquePointer) {
+        let drc = wantsNightMode ? "1" : "0"
+        if drc != appliedAC3DRC {
+            appliedAC3DRC = drc
+            mpv_set_property_string(mpv, "ad-lavc-ac3drc", drc)
+        }
+        let active = wantsNightMode || wantsDialogBoost
+        // While the layout is unknown (between files) the current chain stays; off always clears it.
+        guard !active || (sourceChannels > 0 && outputChannels > 0) else { return }
+        let filter = AudioEnhancement.filter(night: wantsNightMode, dialog: wantsDialogBoost, source: sourceChannels, output: outputChannels)
+        guard filter != appliedAudioFilter else { return }
+        appliedAudioFilter = filter
+        let status = mpv_set_property_string(mpv, "af", filter)
+        if status < 0 {
+            MPVLogBuffer.shared.append("[xt] af=\(filter): \(String(cString: mpv_error_string(status)))")
+        }
     }
 
     // MARK: - mpv core
 
-    private func createCore(wid: Int64, hdr: Bool) {
+    private func createCore(wid: Int64, hdr: Bool, refreshRate: Double) {
         guard let mpv = mpv_create() else {
             publish { $0.state = .failed("Không khởi tạo được libmpv") }
             return
@@ -474,7 +666,7 @@ final class MPVPlayerEngine: ObservableObject {
             ("vo", "gpu-next"),
             ("gpu-api", "vulkan"),
             ("gpu-context", "moltenvk"),
-            ("hwdec", "videotoolbox"),
+            ("hwdec", options.hardwareDecoding ? "videotoolbox" : "no"),
             ("hwdec-codecs", "all"),
             ("video-rotate", "no"),
             ("target-colorspace-hint", hdr ? "yes" : "no"),
@@ -522,6 +714,13 @@ final class MPVPlayerEngine: ObservableObject {
             ("ytdl", "no"),
         ]
         if !options.audioLanguages.isEmpty { settings.append(("alang", options.audioLanguages)) }
+        // The embedded Metal surface gives mpv no refresh rate; display-resample needs it.
+        if refreshRate > 0 { settings.append(("display-fps-override", String(format: "%.3f", refreshRate))) }
+        if options.motionSmoothing { settings += Self.motionOptions(true) }
+        wantsNightMode = options.nightMode
+        wantsDialogBoost = options.dialogBoost
+        appliedAC3DRC = options.nightMode ? "1" : "0"
+        settings.append(("ad-lavc-ac3drc", appliedAC3DRC))
         #if os(macOS)
         // Fallback chain (trailing comma = then mpv's own auto-probe) so a failing output never means silence.
         settings.append(("ao", "coreaudio,avfoundation,"))
@@ -532,6 +731,10 @@ final class MPVPlayerEngine: ObservableObject {
             // bitstreams, and outputs without a digital format (built-in speakers, headphones) fall back to
             // decoded PCM on the shared mixer, so the system volume keeps working for everything else.
             settings.append(("audio-spdif", "ac3,eac3,dts,dts-hd,truehd"))
+        }
+        if options.matchSampleRate {
+            // Bit-perfect sample rate: 44.1 kHz music and 48 / 96 kHz films reach a DAC without resampling.
+            settings.append(("coreaudio-change-physical-format", "yes"))
         }
         #elseif os(tvOS)
         settings.append(("ao", "audiounit,avfoundation,"))
@@ -555,6 +758,9 @@ final class MPVPlayerEngine: ObservableObject {
         }
 
         MPVStreamProtocols.register(on: mpv)
+
+        for key in PictureQuality.keys { rendererDefaults[key] = getString(mpv, key) ?? "" }
+        applyPictureQuality(options.pictureQuality, mpv)
 
         let observed: [(String, mpv_format)] = [
             ("time-pos", MPV_FORMAT_DOUBLE),
@@ -582,6 +788,9 @@ final class MPVPlayerEngine: ObservableObject {
             ("video-bitrate", MPV_FORMAT_DOUBLE),
             ("audio-bitrate", MPV_FORMAT_DOUBLE),
             ("audio-params/channel-count", MPV_FORMAT_INT64),
+            ("audio-out-params/channel-count", MPV_FORMAT_INT64),
+            ("frame-drop-count", MPV_FORMAT_INT64),
+            ("vo-drop-frame-count", MPV_FORMAT_INT64),
             ("audio-params/samplerate", MPV_FORMAT_INT64),
             ("chapter-list/count", MPV_FORMAT_INT64),
             ("chapter", MPV_FORMAT_INT64),
@@ -741,8 +950,17 @@ final class MPVPlayerEngine: ObservableObject {
             let v = double()
             publish { $0.audioBitrate = v }
         case "audio-params/channel-count":
-            let v = int()
+            sourceChannels = int()
+            applyAudioEnhancements(mpv)
+        case "audio-out-params/channel-count":
+            outputChannels = int()
+            let v = outputChannels
             publish { $0.audio.outputChannels = v }
+            applyAudioEnhancements(mpv)
+        case "frame-drop-count", "vo-drop-frame-count":
+            if name == "frame-drop-count" { decoderDrops = int() } else { outputDrops = int() }
+            let v = decoderDrops + outputDrops
+            publish { $0.droppedFrames = v }
         case "audio-params/samplerate":
             let v = int()
             publish { $0.audio.sampleRate = v }
@@ -925,6 +1143,18 @@ final class MPVPlayerEngine: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    /// Refresh rate of the screen showing the video (iPhone and iPad run Metal layers at 60 Hz unless the
+    /// app opts into ProMotion). Apple TV switches modes per film, so it is left to mpv there.
+    private static func displayRefreshRate(_ view: MPVVideoView) -> Double {
+        #if os(macOS)
+        return Double((view.window?.screen ?? NSScreen.main)?.maximumFramesPerSecond ?? 0)
+        #elseif os(iOS)
+        return Double(min(60, UIScreen.main.maximumFramesPerSecond))
+        #else
+        return 0
+        #endif
+    }
 
     private static func displaySupportsHDR(_ view: MPVVideoView) -> Bool {
         #if os(iOS) || os(tvOS)

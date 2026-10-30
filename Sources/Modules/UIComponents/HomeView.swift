@@ -381,6 +381,14 @@ struct LibraryIndex {
         return sorted.first { !(entriesByKey[$0.key]?.isWatched ?? false) } ?? sorted.first
     }
 
+    /// "Unwatched": a film never played (in progress counts as played, as in Infuse); a show with an episode
+    /// not played yet.
+    func isUnplayed(_ item: LibraryItem) -> Bool {
+        let files = filesByItem[item.key] ?? []
+        let unplayed: (LibraryFile) -> Bool = { !(entriesByKey[$0.key]?.isStarted ?? false) }
+        return item.kind == .show ? files.contains(where: unplayed) : files.allSatisfy(unplayed)
+    }
+
     func progress(of item: LibraryItem) -> (progress: Double?, watched: Bool) {
         let files = filesByItem[item.key] ?? []
         let mine = files.compactMap { entriesByKey[$0.key] }

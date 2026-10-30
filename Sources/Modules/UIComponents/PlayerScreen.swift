@@ -171,6 +171,11 @@ struct PlayerScreen: View {
             guard !label.isEmpty else { return }
             MediaLibrary.learn(fileKey: current.key, resolution: label, duration: engine.duration, in: context)
         }
+        // mpv often reports the duration just after "playing": the start scrobble waits for it, otherwise
+        // the pause / stop scrobbles that follow it are skipped too and Trakt never sees the file.
+        .onChange(of: engine.duration > 0) { _, known in
+            if known, engine.state == .playing { scrobble(.start) }
+        }
         .onChange(of: engine.state) { _, state in
             switch state {
             case .playing: scrobble(.start)

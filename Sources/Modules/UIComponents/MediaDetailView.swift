@@ -88,7 +88,7 @@ struct LibraryGridView: View {
         case .movies: list = allItems.filter { $0.kind == .movie }
         case .shows: list = allItems.filter { $0.kind == .show }
         case .recent: return Array(allItems.sorted { $0.addedAt > $1.addedAt }.prefix(60))
-        case .unwatched: list = allItems.filter { !index.progress(of: $0).watched }
+        case .unwatched: list = allItems.filter { index.isUnplayed($0) }
         case .topRated: list = allItems.filter { ($0.rating ?? 0) > 0 }
         }
         switch sort {

@@ -1132,11 +1132,20 @@ struct AudioPanel: View {
                 }
             }
             #endif
-            PanelSection(title: "Night Mode") {
-                PanelChoice(text: "Nén dải động — nghe rõ thoại khi để nhỏ", detail: engine.nightMode ? "Bật" : "Tắt",
+            PanelSection(title: "Cải thiện âm thanh") {
+                PanelChoice(text: "Tăng thoại — lời nói rõ hơn nhạc nền", detail: engine.dialogBoost ? "Bật" : "Tắt",
+                            selected: engine.dialogBoost) {
+                    engine.setDialogBoost(!engine.dialogBoost)
+                    onInteraction()
+                }
+                PanelChoice(text: "Chế độ ban đêm — tiếng nổ bớt to", detail: engine.nightMode ? "Bật" : "Tắt",
                             selected: engine.nightMode) {
                     engine.setNightMode(!engine.nightMode)
                     onInteraction()
+                }
+                if engine.isBitstreaming {
+                    Text("Đang bitstream qua HDMI: ampli tự xử lý âm thanh.")
+                        .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 8)
                 }
             }
             PanelSection(title: "Đồng bộ") {
@@ -1207,6 +1216,30 @@ struct VideoPanel: View {
                     }
                 }
             }
+            PanelSection(title: "Chất lượng hình ảnh") {
+                ForEach(PictureQuality.allCases) { quality in
+                    PanelChoice(text: quality.label, detail: quality.detail, selected: engine.pictureQuality == quality) {
+                        engine.setPictureQuality(quality)
+                        onInteraction()
+                    }
+                }
+            }
+            PanelSection(title: "Tối ưu") {
+                PanelChoice(text: "Giải mã phần cứng", detail: engine.hardwareDecoding ? "Bật" : "Tắt", selected: engine.hardwareDecoding) {
+                    engine.setHardwareDecoding(!engine.hardwareDecoding)
+                    onInteraction()
+                }
+                #if !os(tvOS)
+                PanelChoice(text: "Chuyển động mượt (khử rung 24p)", detail: engine.motionSmoothing ? "Bật" : "Tắt", selected: engine.motionSmoothing) {
+                    engine.setMotionSmoothing(!engine.motionSmoothing)
+                    onInteraction()
+                }
+                #endif
+                if engine.droppedFrames > 0 {
+                    Text("Đã rớt \(engine.droppedFrames) khung hình — nếu hình giật, hạ chất lượng hình ảnh hoặc bật giải mã phần cứng.")
+                        .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 8)
+                }
+            }
             PanelSection(title: "Tốc độ phát") {
                 ForEach(PlayerControlsOverlay.playbackSpeeds, id: \.self) { value in
                     PanelChoice(text: PlayerControlsOverlay.speedText(value), selected: abs(engine.speed - value) < 0.01) {
@@ -1260,14 +1293,18 @@ struct InfoPanel: View {
                     row("Dải động", engine.video.dynamicRangeLabel(hdrOutput: engine.hdrOutputActive))
                     row("Màu", [engine.video.primaries, engine.video.gamma, engine.video.colorMatrix].filter { !$0.isEmpty }.joined(separator: " / "))
                 }
-                row("Giải mã", engine.hardwareDecoder.isEmpty || engine.hardwareDecoder == "no" ? "Phần mềm (CPU)" : "Phần cứng · \(engine.hardwareDecoder)")
+                row("Giải mã", Self.decoderText(engine))
+                row("Xử lý hình", engine.pictureQuality.label + (engine.motionSmoothing ? " · chuyển động mượt" : ""))
+                if engine.droppedFrames > 0 { row("Khung bị rớt", "\(engine.droppedFrames)", warning: engine.droppedFrames > 30) }
                 if engine.videoBitrate > 0 { row("Bitrate", Self.bitrate(engine.videoBitrate)) }
             }
             section("Âm thanh") {
                 row("Định dạng", engine.audio.codec)
                 if engine.audio.channels > 0 { row("Kênh", MediaTrack.channelLayout(engine.audio.channels)) }
                 if engine.audio.sampleRate > 0 { row("Tần số", String(format: "%.1f kHz", Double(engine.audio.sampleRate) / 1000)) }
-                if engine.audio.outputChannels > 0 { row("Kênh ra", MediaTrack.channelLayout(engine.audio.outputChannels)) }
+                if engine.audio.outputChannels > 0, !engine.isBitstreaming { row("Kênh ra", MediaTrack.channelLayout(engine.audio.outputChannels)) }
+                let enhancements = [engine.dialogBoost ? "Tăng thoại" : nil, engine.nightMode ? "Ban đêm" : nil].compactMap { $0 }
+                if !enhancements.isEmpty, !engine.isBitstreaming { row("Xử lý tiếng", enhancements.joined(separator: " · ")) }
                 row("Đầu ra", engine.audioOutput.isEmpty ? "Chưa mở — không có tiếng"
                         : engine.isBitstreaming ? "Bitstream qua HDMI — âm lượng chỉnh trên ampli" : engine.audioOutput,
                     warning: engine.audioOutput.isEmpty && !engine.audioTracks.isEmpty)
@@ -1325,6 +1362,13 @@ struct InfoPanel: View {
             }
             .font(.callout)
         }
+    }
+
+    /// Hardware decoder in use; software only once frames are being decoded (before that mpv reports none).
+    static func decoderText(_ engine: MPVPlayerEngine) -> String {
+        if !engine.hardwareDecoder.isEmpty, engine.hardwareDecoder != "no" { return "Phần cứng · \(engine.hardwareDecoder)" }
+        guard engine.state == .playing || engine.state == .paused || engine.state == .ended else { return "" }
+        return engine.hardwareDecoding ? "Phần mềm (CPU) — chip không giải mã được định dạng này" : "Phần mềm (CPU) — đã tắt giải mã phần cứng"
     }
 
     static func bitrate(_ bitsPerSecond: Double) -> String {

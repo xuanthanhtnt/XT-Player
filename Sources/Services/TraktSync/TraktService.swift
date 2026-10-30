@@ -26,6 +26,14 @@ enum TraktMedia: Hashable {
         }
     }
 
+    /// "Dune (2021)" / "Breaking Bad S01E02", for the diagnostics log.
+    var label: String {
+        switch self {
+        case let .movie(title, year, _): return year.map { "\(title) (\($0))" } ?? title
+        case let .episode(show, _, _, season, number): return String(format: "%@ S%02dE%02d", show, season, number)
+        }
+    }
+
     static func object(title: String, year: Int?, tmdb: Int?) -> [String: Any] {
         var object: [String: Any] = ["title": title]
         if let year { object["year"] = year }
@@ -84,6 +92,7 @@ final class TraktService: ObservableObject {
     @Published private(set) var username = ""
     @Published private(set) var status = ""
     @Published private(set) var isSyncing = false
+    @Published private(set) var lastSync: Date?
 
     private struct Token: Codable {
         var access: String
@@ -187,8 +196,21 @@ final class TraktService: ObservableObject {
     func scrobble(_ action: ScrobbleAction, media: TraktMedia, progress: Double) {
         guard isConnected, scrobbleEnabled, progress.isFinite else { return }
         var body = media.scrobbleObject
-        body["progress"] = min(100, max(0, (progress * 100).rounded() / 100))
-        Task { _ = try? await raw("/scrobble/\(action.rawValue)", method: "POST", body: body, authorized: true) }
+        let percent = min(100, max(0, (progress * 100).rounded() / 100))
+        body["progress"] = percent
+        Task {
+            do {
+                let (status, _) = try await raw("/scrobble/\(action.rawValue)", method: "POST", body: body, authorized: true)
+                switch status {
+                case 200...299: log("scrobble \(action.rawValue) \(media.label) \(Int(percent)) %")
+                case 409: break                             // the same item was scrobbled moments ago
+                case 404: log("scrobble \(media.label): Trakt không tìm thấy phim / tập này")
+                default: log("scrobble \(action.rawValue) \(media.label): HTTP \(status)")
+                }
+            } catch {
+                log("scrobble \(action.rawValue) \(media.label): \(error.localizedDescription)")
+            }
+        }
     }
 
     // MARK: History
@@ -196,7 +218,14 @@ final class TraktService: ObservableObject {
     func setWatched(_ watched: Bool, media: [TraktMedia]) {
         guard isConnected, !media.isEmpty else { return }
         let body = Self.historyBody(media)
-        Task { _ = try? await raw(watched ? "/sync/history" : "/sync/history/remove", method: "POST", body: body, authorized: true) }
+        Task {
+            do {
+                let (status, _) = try await raw(watched ? "/sync/history" : "/sync/history/remove", method: "POST", body: body, authorized: true)
+                log("\(watched ? "đánh dấu đã xem" : "bỏ đã xem") \(media.count) mục: HTTP \(status)")
+            } catch {
+                log("lịch sử xem: \(error.localizedDescription)")
+            }
+        }
     }
 
     private static func historyBody(_ media: [TraktMedia]) -> [String: Any] {
@@ -223,6 +252,12 @@ final class TraktService: ObservableObject {
 
     // MARK: Sync
 
+    /// Syncs unless that happened in the last `interval` seconds (app back in front, player closed, timer).
+    func syncIfStale(context: ModelContext, interval: TimeInterval = 300) async {
+        if let lastSync, Date().timeIntervalSince(lastSync) < interval { return }
+        await sync(context: context)
+    }
+
     /// Pulls resume points and watched history into the library and pushes local "watched" Trakt lacks.
     func sync(context: ModelContext) async {
         guard isConnected, !isSyncing else { return }
@@ -236,10 +271,12 @@ final class TraktService: ObservableObject {
             let watchedShows = try await getList("/sync/watched/shows")
 
             var resumed = 0
+            var matched = Set<String>()
             for item in playback {
                 guard let media = Self.media(from: item), let progress = item["progress"] as? Double,
                       let pausedAt = Self.date(item["paused_at"]) else { continue }
                 for key in index.keys(for: media) {
+                    matched.insert(key)
                     if applyResume(key: key, progress: progress, at: pausedAt, index: index, context: context) { resumed += 1 }
                 }
             }
@@ -251,9 +288,11 @@ final class TraktService: ObservableObject {
                 remoteWatched.insert(media.identity)
                 let at = Self.date(item["last_watched_at"]) ?? .distantPast
                 for key in index.keys(for: media) {
+                    matched.insert(key)
                     if markWatched(key: key, at: at, index: index, context: context) { marked += 1 }
                 }
             }
+            var remoteEpisodes = 0
             for item in watchedShows {
                 guard let show = item["show"] as? [String: Any], let seasons = item["seasons"] as? [[String: Any]] else { continue }
                 for season in seasons {
@@ -262,8 +301,10 @@ final class TraktService: ObservableObject {
                         guard let episodeNumber = episode["number"] as? Int,
                               let media = Self.episode(show: show, season: number, number: episodeNumber) else { continue }
                         remoteWatched.insert(media.identity)
+                        remoteEpisodes += 1
                         let at = Self.date(episode["last_watched_at"]) ?? .distantPast
                         for key in index.keys(for: media) {
+                            matched.insert(key)
                             if markWatched(key: key, at: at, index: index, context: context) { marked += 1 }
                         }
                     }
@@ -276,9 +317,16 @@ final class TraktService: ObservableObject {
             let missing = entries.filter(\.isWatched).compactMap { index.media[$0.key] }.filter { !remoteWatched.contains($0.identity) }
             if !missing.isEmpty { setWatched(true, media: Array(Set(missing))) }
 
-            status = "Đã đồng bộ: \(resumed) điểm xem tiếp, \(marked) mục đã xem" + (missing.isEmpty ? "" : ", gửi \(missing.count) lên Trakt")
+            lastSync = .now
+            var parts = ["Trakt có \(watchedMovies.count) phim, \(remoteEpisodes) tập đã xem, \(playback.count) điểm xem tiếp",
+                         "khớp \(matched.count) tệp trong thư viện (\(index.media.count) tệp nhận diện được)"]
+            if resumed + marked > 0 { parts.append("cập nhật \(resumed + marked)") }
+            if !missing.isEmpty { parts.append("gửi \(missing.count) mục đã xem lên Trakt") }
+            status = parts.joined(separator: " · ")
+            log("sync: " + status)
         } catch {
             status = error.localizedDescription
+            log("sync: \(error.localizedDescription)")
         }
     }
 
@@ -352,6 +400,10 @@ final class TraktService: ObservableObject {
             case let .message(text): return text
             }
         }
+    }
+
+    private func log(_ message: String) {
+        MPVLogBuffer.shared.append("[trakt] \(message)")
     }
 
     private func loadUsername() async {
@@ -433,10 +485,24 @@ final class TraktService: ObservableObject {
         request.setValue("2", forHTTPHeaderField: "trakt-api-version")
         request.setValue(client.id, forHTTPHeaderField: "trakt-api-key")
         request.setValue("XT-Player/\(UpdateChecker.currentVersion)", forHTTPHeaderField: "User-Agent")
-        if authorized { request.setValue("Bearer \(try await validAccessToken())", forHTTPHeaderField: "Authorization") }
+        if authorized {
+            request.setValue("Bearer \(try await validAccessToken())", forHTTPHeaderField: "Authorization")
+            // Watched lists and resume points change on other devices: never answer them from the URL cache.
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+        }
         if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
-        let (data, response) = try await URLSession.shared.data(for: request)
-        return ((response as? HTTPURLResponse)?.statusCode ?? 0, data)
+        for attempt in 0..<3 {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let http = response as? HTTPURLResponse
+            // Rate limit (1000 GET / 5 min, 1 POST / s): wait as long as Trakt asks, then retry.
+            if http?.statusCode == 429, attempt < 2 {
+                let wait = Double(http?.value(forHTTPHeaderField: "Retry-After") ?? "") ?? 2
+                try await Task.sleep(for: .seconds(min(30, max(1, wait))))
+                continue
+            }
+            return (http?.statusCode ?? 0, data)
+        }
+        return (429, Data())
     }
 }
 
@@ -449,6 +515,8 @@ struct TraktLibraryIndex {
     private(set) var titles: [String: String] = [:]
     /// file key → minutes.
     private(set) var runtime: [String: Int] = [:]
+    /// Films by normalised title (display and original), for Trakt items whose year differs or is missing here.
+    private var moviesByTitle: [String: [(key: String, year: Int?)]] = [:]
 
     static func build(context: ModelContext) -> TraktLibraryIndex {
         var index = TraktLibraryIndex()
@@ -459,9 +527,19 @@ struct TraktLibraryIndex {
             if item.kind == .show, let season = file.season, let episode = file.episode {
                 forms.append(.episode(show: item.title, year: item.year, tmdb: item.tmdbID, season: season, number: episode))
                 if item.tmdbID != nil { forms.append(.episode(show: item.title, year: item.year, tmdb: nil, season: season, number: episode)) }
+                if let original = item.originalTitle, original != item.title {
+                    forms.append(.episode(show: original, year: item.year, tmdb: nil, season: season, number: episode))
+                }
             } else if item.kind == .movie {
                 forms.append(.movie(title: item.title, year: item.year, tmdb: item.tmdbID))
                 if item.tmdbID != nil { forms.append(.movie(title: item.title, year: item.year, tmdb: nil)) }
+                // TMDb in Vietnamese gives a Vietnamese title; Trakt lists the original one.
+                if let original = item.originalTitle, original != item.title {
+                    forms.append(.movie(title: original, year: item.year, tmdb: nil))
+                }
+                for title in Set([item.title, item.originalTitle].compactMap { $0 }) {
+                    index.moviesByTitle[TraktMedia.normalize(title), default: []].append((file.key, item.year))
+                }
             }
             guard let primary = forms.first else { continue }
             if item.tmdbID != nil || item.year != nil || item.kind == .show { index.media[file.key] = primary }
@@ -472,12 +550,22 @@ struct TraktLibraryIndex {
         return index
     }
 
-    /// Library files for a Trakt item: by TMDb id first, then by title and year.
+    /// Library files for a Trakt item: by TMDb id first, then by title and year, then by title alone when one
+    /// side has no year or the years are one apart (release vs. festival year).
     func keys(for media: TraktMedia) -> [String] {
         if let keys = byIdentity[media.identity], !keys.isEmpty { return keys }
         switch media {
-        case let .movie(title, year, tmdb?) where tmdb > 0:
-            return byIdentity[TraktMedia.movie(title: title, year: year, tmdb: nil).identity] ?? []
+        case let .movie(title, year, tmdb):
+            if tmdb != nil, let keys = byIdentity[TraktMedia.movie(title: title, year: year, tmdb: nil).identity], !keys.isEmpty {
+                return keys
+            }
+            let normalized = TraktMedia.normalize(title)
+            guard !normalized.isEmpty else { return [] }
+            let candidates = moviesByTitle[normalized] ?? []
+            return candidates.filter { candidate in
+                guard let year, let local = candidate.year else { return true }
+                return abs(local - year) <= 1
+            }.map(\.key)
         case let .episode(show, year, tmdb?, season, number) where tmdb > 0:
             return byIdentity[TraktMedia.episode(show: show, year: year, tmdb: nil, season: season, number: number).identity] ?? []
         default:

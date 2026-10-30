@@ -17,6 +17,12 @@ enum AppSettings {
     static let subtitleBackground = "subtitles.background"
     static let metadataLanguage = "library.language"
     static let openSubtitlesUser = "opensubtitles.username"
+    static let hardwareDecoding = "player.hardwareDecoding"
+    static let pictureQuality = "player.pictureQuality"
+    static let motionSmoothing = "player.motionSmoothing"
+    static let matchSampleRate = "audio.matchSampleRate"
+    static let nightMode = "audio.nightMode"
+    static let dialogBoost = "audio.dialogBoost"
 
     static func registerDefaults() {
         #if os(macOS)
@@ -38,6 +44,12 @@ enum AppSettings {
             subtitlePosition: 100,
             subtitleBackground: false,
             metadataLanguage: "vi-VN",
+            hardwareDecoding: true,
+            pictureQuality: PictureQuality.platformDefault.rawValue,
+            motionSmoothing: false,
+            matchSampleRate: false,
+            nightMode: false,
+            dialogBoost: false,
         ])
     }
 
@@ -81,7 +93,8 @@ enum AppSettings {
 /// Minimal generic-password Keychain wrapper. Falls back to UserDefaults when the Keychain is not
 /// usable (e.g. an ad-hoc signed macOS build), so credentials still work there.
 enum Keychain {
-    private static let service = "com.xuanthanhtnt.xtplayer"
+    /// The app's own bundle id, so a side-by-side test copy never reads (or prompts for) the real app's items.
+    private static let service = Bundle.main.bundleIdentifier ?? "com.xuanthanhtnt.xtplayer"
 
     static func set(_ value: String?, account: String) {
         let query: [String: Any] = [
