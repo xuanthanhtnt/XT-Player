@@ -15,7 +15,7 @@
 
 ---
 
-## Trạng thái: v0.2.2 — Stream NAS mượt, AirPlay, tự cập nhật
+## Trạng thái: v0.2.3 — Stream NAS mượt, AirPlay, tự cập nhật
 
 | Hạng mục | Có trong v0.2.1 |
 |---|---|
@@ -140,6 +140,7 @@ Mở **Cài đặt ▸ Nhật ký trình phát** (hoặc nút ⓘ trong player �
 - [x] **v0.2**: macOS DMG, SMB3 và WebDAV, Bonjour, thư viện TMDb, Up Next, chapter, Now Playing, Cài đặt
 - [x] **v0.2.1**: Logo mới, giao diện kiểu Infuse (thanh bên, banner, bảng track/thông tin), sửa co giãn video & toàn màn hình trên Mac, sửa/chẩn đoán âm thanh
 - [x] **v0.2.2**: Stream SMB đa kết nối (hết buffer liên tục với MP4 không xen kẽ), ảnh bìa từ khung hình, AirPlay, kiểm tra & cài bản cập nhật trong app
+- [x] **v0.2.3**: macOS chỉnh được âm lượng khi bật Bitstream HDMI (chỉ dùng chế độ độc quyền lúc thật sự bitstream)
 - [ ] **v0.3**: Engine AVPlayer cho Dolby Vision và Atmos (Apple TV), song song với libmpv
 - [ ] **v0.4**: OpenSubtitles, scrub thumbnails, Top Shelf
 - [ ] **v0.5**: Trakt.tv sync, iCloud
