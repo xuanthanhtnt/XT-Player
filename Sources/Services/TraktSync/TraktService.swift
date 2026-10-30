@@ -371,20 +371,30 @@ final class TraktService: ObservableObject {
         if let data = try? JSONEncoder().encode(token) { Keychain.set(String(decoding: data, as: UTF8.self), account: Self.tokenAccount) }
     }
 
+    /// Redirect URIs a Trakt app may be registered with: new (Development) apps only accept localhost, older
+    /// apps used the out-of-band URN. The refresh request must name the registered one.
+    private static let redirectURIs = ["http://localhost", "http://127.0.0.1", "urn:ietf:wg:oauth:2.0:oob"]
+
     /// Refreshes the access token a day before it expires (Trakt tokens last about three months).
     private func validAccessToken() async throws -> String {
         guard let token else { throw TraktError.http(401) }
         guard token.expires.timeIntervalSinceNow < 86_400, let client = AppSettings.traktClient else { return token.access }
-        let (status, body) = try await raw("/oauth/token", method: "POST", body: [
-            "refresh_token": token.refresh, "client_id": client.id, "client_secret": client.secret,
-            "redirect_uri": "urn:ietf:wg:oauth:2.0:oob", "grant_type": "refresh_token",
-        ], authorized: false)
-        guard status == 200 else {
-            if status == 401 || status == 400 { disconnect() }
-            throw TraktError.http(status)
+        var status = 0
+        for redirect in Self.redirectURIs {
+            let (code, body) = try await raw("/oauth/token", method: "POST", body: [
+                "refresh_token": token.refresh, "client_id": client.id, "client_secret": client.secret,
+                "redirect_uri": redirect, "grant_type": "refresh_token",
+            ], authorized: false)
+            if code == 200 {
+                try store(body)
+                return self.token?.access ?? token.access
+            }
+            status = code
+            // 400 / 401 can mean a redirect URI the app was not registered with: try the next one.
+            guard code == 400 || code == 401 else { break }
         }
-        try store(body)
-        return self.token?.access ?? token.access
+        if status == 401 || status == 400 { disconnect() }
+        throw TraktError.http(status)
     }
 
     private func getList(_ path: String) async throws -> [[String: Any]] {

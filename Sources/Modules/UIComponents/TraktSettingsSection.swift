@@ -69,7 +69,7 @@ struct TraktSettingsSection: View {
         } header: {
             Text("Trakt")
         } footer: {
-            Text("Đồng bộ đã xem và điểm xem tiếp giữa Mac, iPhone, Apple TV (và Infuse nếu cũng nối Trakt). Lần đầu: tạo ứng dụng tại trakt.tv/oauth/applications/new — Redirect URI: urn:ietf:wg:oauth:2.0:oob — rồi dán Client ID và Client Secret ở trên.")
+            Text("Đồng bộ đã xem và điểm xem tiếp giữa Mac, iPhone, Apple TV (và Infuse nếu cũng nối Trakt). Lần đầu: tạo ứng dụng tại trakt.tv/oauth/applications/new — App type: Development, Redirect URIs: http://localhost — rồi dán Client ID và Client Secret ở trên.")
         }
         .onAppear {
             clientID = Keychain.get(account: "trakt.clientID") ?? ""
