@@ -375,10 +375,11 @@ final class TraktService: ObservableObject {
     /// apps used the out-of-band URN. The refresh request must name the registered one.
     private static let redirectURIs = ["http://localhost", "http://127.0.0.1", "urn:ietf:wg:oauth:2.0:oob"]
 
-    /// Refreshes the access token a day before it expires (Trakt tokens last about three months).
+    /// Refreshes the access token when less than an hour is left (also once it has expired: the refresh token
+    /// stays valid), so short-lived tokens are not renewed on every request.
     private func validAccessToken() async throws -> String {
         guard let token else { throw TraktError.http(401) }
-        guard token.expires.timeIntervalSinceNow < 86_400, let client = AppSettings.traktClient else { return token.access }
+        guard token.expires.timeIntervalSinceNow < 3_600, let client = AppSettings.traktClient else { return token.access }
         var status = 0
         for redirect in Self.redirectURIs {
             let (code, body) = try await raw("/oauth/token", method: "POST", body: [
