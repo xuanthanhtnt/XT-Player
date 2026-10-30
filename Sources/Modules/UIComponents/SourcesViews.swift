@@ -30,6 +30,7 @@ struct BrowserView: View {
     @EnvironmentObject private var scanner: LibraryScanner
     @Query private var folders: [LibraryFolder]
     @State private var items: [RemoteItem] = []
+    @State private var resolvedServer: ServerCredentials?
     @State private var loading = true
     @State private var error: String?
 
@@ -64,8 +65,12 @@ struct BrowserView: View {
             }
             ForEach(videos) { item in
                 Button { playFile(item) } label: {
-                    HStack {
-                        Image(systemName: "play.rectangle.fill").foregroundStyle(Theme.leaf)
+                    HStack(spacing: 12) {
+                        if let resolvedServer {
+                            BrowserThumbnail(server: resolvedServer, item: item)
+                        } else {
+                            Image(systemName: "play.rectangle.fill").foregroundStyle(Theme.leaf)
+                        }
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.name).lineLimit(2)
                             Text(detail(item)).font(.caption).foregroundStyle(.secondary)
@@ -100,6 +105,7 @@ struct BrowserView: View {
             return
         }
         if reconnect { RemoteFileSystemPool.shared.reset(serverID) }
+        resolvedServer = server
         loading = true
         error = nil
         do {
