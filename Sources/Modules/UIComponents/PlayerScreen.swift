@@ -60,6 +60,14 @@ struct PlayerScreen: View {
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
 
+            // Music without a picture track: the album cover and title instead of a black screen (files with an
+            // embedded cover show it through mpv as a still frame).
+            if engine.videoCodec.isEmpty, engine.state != .loading, !engine.audioTracks.isEmpty {
+                NowPlayingArtwork(title: current.title, subtitle: current.subtitle, artworkPath: current.artworkPath)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+
             inputLayer
 
             #if os(macOS)
@@ -186,7 +194,14 @@ struct PlayerScreen: View {
             switch state {
             case .ended:
                 saveProgress()
-                if next != nil, autoplayNext { startUpNext() } else { showControls(autoHide: false) }
+                if next != nil, isMusic(current) {
+                    // An album plays straight on, without the films' "Up Next" countdown.
+                    advance(by: 1)
+                } else if next != nil, autoplayNext {
+                    startUpNext()
+                } else {
+                    showControls(autoHide: false)
+                }
             case .paused:
                 showControls(autoHide: false)
             default:
@@ -504,6 +519,10 @@ struct PlayerScreen: View {
     private var airPlayController: AirPlayController? { airPlay }
     #endif
 
+    private func isMusic(_ item: PlaybackItem) -> Bool {
+        FilenameParser.audioExtensions.contains((item.source.displayName as NSString).pathExtension.lowercased())
+    }
+
     private func advance(by step: Int) {
         let target = index + step
         guard target >= 0, target < session.items.count else { return }
@@ -644,4 +663,41 @@ struct PlayerScreen: View {
         .frame(maxWidth: 560)
         .glassPanel()
     }
+}
+
+/// Cover, title and artist for audio-only files.
+private struct NowPlayingArtwork: View {
+    let title: String
+    let subtitle: String?
+    let artworkPath: String?
+
+    var body: some View {
+        ZStack {
+            ArtworkImage(path: artworkPath, size: "w780", placeholderIcon: "music.note")
+                .blur(radius: 60)
+                .opacity(0.35)
+                .ignoresSafeArea()
+            VStack(spacing: 18) {
+                ArtworkImage(path: artworkPath, size: "w500", placeholderIcon: "music.note")
+                    .frame(width: Self.cover, height: Self.cover)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .shadow(color: .black.opacity(0.5), radius: 24, y: 10)
+                VStack(spacing: 4) {
+                    Text(title).font(.title2.weight(.bold)).multilineTextAlignment(.center)
+                    if let subtitle, !subtitle.isEmpty {
+                        Text(subtitle).font(.callout).foregroundStyle(.white.opacity(0.7)).multilineTextAlignment(.center)
+                    }
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 40)
+            }
+            .padding(.bottom, 80)
+        }
+    }
+
+    #if os(tvOS)
+    static let cover: CGFloat = 420
+    #else
+    static let cover: CGFloat = 260
+    #endif
 }

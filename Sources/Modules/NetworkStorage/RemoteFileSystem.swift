@@ -23,6 +23,8 @@ struct RemoteItem: Identifiable, Hashable {
 protocol RemoteFileSystem: AnyObject {
     /// Lists `path` ("" = root: SMB shares, or the WebDAV base path).
     func list(_ path: String) async throws -> [RemoteItem]
+    /// Reads a small file whole (album cover images).
+    func download(_ path: String) async throws -> Data
     func close() async
 }
 
@@ -115,6 +117,18 @@ actor SMBFileSystem: RemoteFileSystem {
             }
     }
 
+    func download(_ path: String) async throws -> Data {
+        let client = try await connectedClient()
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard let share = parts.first, parts.count > 1 else { throw RemoteError.invalidAddress }
+        if connectedShare != share {
+            if connectedShare != nil { _ = try? await client.disconnectShare() }
+            _ = try await client.connectShare(share)
+            connectedShare = share
+        }
+        return try await client.download(path: parts.dropFirst().joined(separator: "/"))
+    }
+
     func close() async {
         if let client {
             _ = try? await client.logoff()
@@ -199,6 +213,18 @@ final class WebDAVFileSystem: NSObject, RemoteFileSystem, URLSessionTaskDelegate
         return WebDAVParser.parse(data)
             .filter { Self.normalize($0.path) != normalizedSelf }
             .filter { !$0.name.hasPrefix(".") && !$0.name.hasPrefix("@") && $0.name != "#recycle" }
+    }
+
+    func download(_ path: String) async throws -> Data {
+        guard let url = RemoteFileSystems.playbackURL(server: server, path: path) else { throw RemoteError.invalidAddress }
+        var request = URLRequest(url: url)
+        if !server.username.isEmpty, let token = "\(server.username):\(server.password)".data(using: .utf8)?.base64EncodedString() {
+            request.setValue("Basic \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await session.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200...299).contains(status) else { throw RemoteError.badResponse(status) }
+        return data
     }
 
     func close() async {

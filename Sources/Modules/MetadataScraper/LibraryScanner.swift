@@ -23,6 +23,10 @@ final class LibraryScanner: ObservableObject {
         let item: RemoteItem
         let parentName: String
         let subtitles: [String]
+        /// Folder holding the file, its name's parent folder (album artist), and a cover image next to it.
+        var directory = ""
+        var directoryParent: String?
+        var cover: RemoteItem?
     }
 
     /// Scans every library folder of every server.
@@ -45,10 +49,11 @@ final class LibraryScanner: ObservableObject {
         status = "Đang quét \(folder.name)…"
         defer { isScanning = false }
 
+        let kind = LibraryFolderKind.of(folder.key)
         let fs = RemoteFileSystems.make(credentials)
         let found: [Found]
         do {
-            found = try await Self.collect(fs: fs, root: folder.path) { [weak self] count in
+            found = try await Self.collect(fs: fs, root: folder.path, audio: kind == .music) { [weak self] count in
                 self?.status = "Đang quét \(folder.name): \(count) tệp…"
             }
         } catch {
@@ -57,13 +62,42 @@ final class LibraryScanner: ObservableObject {
             status = ""
             return
         }
-        await fs.close()
 
+        var seenKeys = Set<String>()
+        switch kind {
+        case .films:
+            await fs.close()
+            await recogniseFilms(found, folder: folder, credentials: credentials, seenKeys: &seenKeys, context: context)
+        case .musicVideos:
+            await fs.close()
+            recogniseMusicVideos(found, folder: folder, credentials: credentials, seenKeys: &seenKeys, context: context)
+        case .music:
+            await recogniseAlbums(found, fs: fs, folder: folder, credentials: credentials, seenKeys: &seenKeys, context: context)
+            await fs.close()
+        }
+
+        // Files that disappeared from this folder.
+        let folderKey = folder.key
+        let stale = (try? context.fetch(FetchDescriptor<LibraryFile>(predicate: #Predicate { $0.folderKey == folderKey }))) ?? []
+        for file in stale where !seenKeys.contains(file.key) {
+            context.delete(file)
+        }
+        removeOrphanItems(context: context)
+
+        folder.lastScan = .now
+        folder.fileCount = found.count
+        try? context.save()
+        status = "Đã quét \(found.count) tệp trong \(folder.name)"
+        Task { await generateMissingArtwork(context: context) }
+    }
+
+    /// Movies and episodes: recognised from names, enriched from TMDb (or Trakt without a TMDb key).
+    private func recogniseFilms(_ found: [Found], folder: LibraryFolder, credentials: ServerCredentials,
+                                seenKeys: inout Set<String>, context: ModelContext) async {
         let tmdb = TMDbClient.current()
         let trakt = tmdb == nil ? TraktMetadata.current() : nil
         var showCache: [String: LibraryItem] = [:]
         var movieCache: [String: LibraryItem] = [:]
-        var seenKeys = Set<String>()
         for (index, entry) in found.enumerated() {
             status = "Nhận diện \(index + 1)/\(found.count)…"
             let parsed = Self.recognise(fileName: entry.item.name, parentFolder: entry.parentName)
@@ -90,14 +124,7 @@ final class LibraryScanner: ObservableObject {
                 }
             }
 
-            let file = existingFile(key: fileKey, context: context) ?? {
-                let f = LibraryFile(key: fileKey, itemKey: item.key, folderKey: folder.key, serverID: credentials.id,
-                                    path: entry.item.path, fileName: entry.item.name, size: entry.item.size)
-                context.insert(f)
-                return f
-            }()
-            file.itemKey = item.key
-            file.size = entry.item.size
+            let file = libraryFile(for: entry, key: fileKey, item: item, folder: folder, credentials: credentials, context: context)
             file.subtitlePaths = entry.subtitles
             file.badges = parsed.badges
             if case let .episode(season, episode) = parsed.kind {
@@ -105,22 +132,151 @@ final class LibraryScanner: ObservableObject {
                 file.episode = episode
             }
         }
-
         await fillEpisodes(of: Array(showCache.values), tmdb: tmdb, trakt: trakt, context: context)
+    }
 
-        // Files that disappeared from this folder.
-        let folderKey = folder.key
-        let stale = (try? context.fetch(FetchDescriptor<LibraryFile>(predicate: #Predicate { $0.folderKey == folderKey }))) ?? []
-        for file in stale where !seenKeys.contains(file.key) {
-            context.delete(file)
+    /// One item per file, titled from its name, artist / show from its folder; no TMDb or Trakt lookup (a concert
+    /// would otherwise turn into an unrelated film). Artwork is a frame of the video.
+    private func recogniseMusicVideos(_ found: [Found], folder: LibraryFolder, credentials: ServerCredentials,
+                                      seenKeys: inout Set<String>, context: ModelContext) {
+        for (index, entry) in found.enumerated() {
+            status = "Nhận diện \(index + 1)/\(found.count)…"
+            let fileKey = RemoteFileSystems.key(server: credentials, path: entry.item.path)
+            seenKeys.insert(fileKey)
+            let parsed = FilenameParser.parse(entry.item.name)
+            let title = parsed.title.count >= 2 ? parsed.title : entry.item.baseName
+            let item = plainItem(key: "musicvideo:\(fileKey)", kind: .musicVideo, title: title, context: context)
+            item.year = parsed.year ?? item.year
+            item.tagline = entry.parentName == folder.name ? nil : entry.parentName
+            let file = libraryFile(for: entry, key: fileKey, item: item, folder: folder, credentials: credentials, context: context)
+            file.subtitlePaths = entry.subtitles
+            file.badges = parsed.badges
         }
-        removeOrphanItems(context: context)
+    }
 
-        folder.lastScan = .now
-        folder.fileCount = found.count
-        try? context.save()
-        status = "Đã quét \(found.count) tệp trong \(folder.name)"
-        Task { await generateMissingArtwork(context: context) }
+    /// One album per folder of tracks ("CD1" / "Disc 2" folders join their parent). The album artist is the folder
+    /// above, or the part before " - " in "Artist - Album"; the cover is cover / folder / front.jpg next to the
+    /// tracks, else the picture embedded in the first track (see generateMissingArtwork).
+    private func recogniseAlbums(_ found: [Found], fs: RemoteFileSystem, folder: LibraryFolder, credentials: ServerCredentials,
+                                 seenKeys: inout Set<String>, context: ModelContext) async {
+        var albums: [String: LibraryItem] = [:]
+        var covers: [String: RemoteItem] = [:]
+        for (index, entry) in found.enumerated() {
+            status = "Nhận diện \(index + 1)/\(found.count)…"
+            let fileKey = RemoteFileSystems.key(server: credentials, path: entry.item.path)
+            seenKeys.insert(fileKey)
+
+            var albumPath = entry.directory
+            var albumName = entry.parentName
+            var artistName = entry.directoryParent
+            var disc: Int?
+            if let number = Self.discNumber(albumName), let parent = entry.directoryParent {
+                disc = number
+                albumPath = (albumPath as NSString).deletingLastPathComponent
+                albumName = parent
+                artistName = nil
+            }
+            let parsedAlbum = Self.albumTitle(albumName)
+            let key = "album:\(credentials.id):\(albumPath)"
+            let album = albums[key] ?? plainItem(key: key, kind: .album, title: parsedAlbum.title, context: context)
+            albums[key] = album
+            album.title = parsedAlbum.title
+            album.year = parsedAlbum.year ?? album.year
+            album.tagline = parsedAlbum.artist ?? (artistName == folder.name ? nil : artistName)
+            if covers[key] == nil, let cover = entry.cover { covers[key] = cover }
+
+            let track = FilenameParser.track(entry.item.name)
+            let file = libraryFile(for: entry, key: fileKey, item: album, folder: folder, credentials: credentials, context: context)
+            file.season = disc ?? track.disc
+            file.episode = track.number
+            file.episodeTitle = track.title
+            file.badges = [MediaTrack.prettyCodec(entry.item.fileExtension == "dff" ? "dsd" : Self.codecName(entry.item.fileExtension))]
+        }
+
+        for (key, cover) in covers {
+            guard let album = albums[key], !ThumbnailStore.isUsable(album.posterPath),
+                  let output = ThumbnailStore.url(for: ThumbnailStore.reference(forKey: "cover:" + key)),
+                  let data = try? await fs.download(cover.path), !data.isEmpty else { continue }
+            try? FileManager.default.createDirectory(at: ThumbnailStore.directory, withIntermediateDirectories: true)
+            guard (try? data.write(to: output)) != nil else { continue }
+            album.posterPath = ThumbnailStore.reference(forKey: "cover:" + key)
+            album.backdropPath = album.posterPath
+        }
+    }
+
+    /// "CD1", "CD 2", "Disc 3", "Disk 1" → disc number.
+    private static func discNumber(_ name: String) -> Int? {
+        let folded = name.lowercased().replacingOccurrences(of: " ", with: "")
+        for prefix in ["cd", "disc", "disk"] where folded.hasPrefix(prefix) {
+            return Int(folded.dropFirst(prefix.count))
+        }
+        return nil
+    }
+
+    /// "Artist - Album (2019) [FLAC 24-96]" → artist, album, year.
+    private static func albumTitle(_ name: String) -> (artist: String?, title: String, year: Int?) {
+        var title = name.replacingOccurrences(of: "_", with: " ")
+        var year: Int?
+        if let regex = try? NSRegularExpression(pattern: #"[\(\[]((?:19|20)\d{2})[\)\]]"#),
+           let match = regex.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)),
+           let range = Range(match.range(at: 1), in: title) {
+            year = Int(title[range])
+        }
+        // Drop bracketed tags: years, formats, bit depths.
+        title = title.replacingOccurrences(of: #"\s*[\(\[\{][^\)\]\}]*[\)\]\}]"#, with: "", options: .regularExpression)
+        var artist: String?
+        let parts = title.components(separatedBy: " - ")
+        if parts.count >= 2, let first = parts.first?.trimmingCharacters(in: .whitespaces), !first.isEmpty {
+            if let leadingYear = Int(first), (1900...2100).contains(leadingYear) {
+                year = year ?? leadingYear
+            } else {
+                artist = first
+            }
+            title = parts.dropFirst().joined(separator: " - ")
+        }
+        title = title.trimmingCharacters(in: .whitespaces)
+        return (artist, title.isEmpty ? name : title, year)
+    }
+
+    private static func codecName(_ fileExtension: String) -> String {
+        switch fileExtension {
+        case "dsf", "dff": return "dsd"
+        case "wv": return "wavpack"
+        case "m4a", "alac": return "alac"
+        case "aif", "aiff", "aifc", "wav", "w64": return "pcm_" + fileExtension
+        case "thd", "truehd": return "truehd"
+        case "dtshd": return "dts"
+        case "ec3": return "eac3"
+        case "oga", "ogg": return "vorbis"
+        case "mpc": return "mpc8"
+        default: return fileExtension
+        }
+    }
+
+    private func plainItem(key: String, kind: LibraryKind, title: String, context: ModelContext) -> LibraryItem {
+        var descriptor = FetchDescriptor<LibraryItem>(predicate: #Predicate { $0.key == key })
+        descriptor.fetchLimit = 1
+        if let existing = try? context.fetch(descriptor).first {
+            existing.kindRaw = kind.rawValue
+            return existing
+        }
+        let item = LibraryItem(key: key, kind: kind, title: title, year: nil)
+        context.insert(item)
+        return item
+    }
+
+    private func libraryFile(for entry: Found, key: String, item: LibraryItem, folder: LibraryFolder,
+                             credentials: ServerCredentials, context: ModelContext) -> LibraryFile {
+        let file = existingFile(key: key, context: context) ?? {
+            let f = LibraryFile(key: key, itemKey: item.key, folderKey: folder.key, serverID: credentials.id,
+                                path: entry.item.path, fileName: entry.item.name, size: entry.item.size)
+            context.insert(f)
+            return f
+        }()
+        file.itemKey = item.key
+        file.folderKey = folder.key
+        file.size = entry.item.size
+        return file
     }
 
     /// Items without TMDb artwork (home videos, concerts, unmatched titles) and Continue Watching entries
@@ -146,12 +302,21 @@ final class LibraryScanner: ObservableObject {
             let reference = ThumbnailStore.reference(forKey: file.key)
             guard let output = ThumbnailStore.url(for: reference) else { continue }
             if !FileManager.default.fileExists(atPath: output.path) {
+                // Tracks without an embedded picture (and broken files) are not retried at every launch.
+                guard !ThumbnailStore.recentlyFailed(file.key) else { continue }
                 status = "Tạo ảnh bìa \(index + 1)/\(items.count)…"
                 RemoteCredentialStore.shared.register(server)
                 let location = url.absoluteString
-                guard let probe = await Task.detached(priority: .utility, operation: { FrameGrabber.grab(location, to: output) }).value
-                else { continue }
-                MediaLibrary.learn(fileKey: file.key, resolution: probe.resolutionLabel, duration: probe.duration, in: context)
+                // An album's picture is the cover embedded in its first track (shown by mpv as a still frame).
+                let fraction = item.kind == .album ? 0.0 : 0.2
+                guard let probe = await Task.detached(priority: .utility, operation: { FrameGrabber.grab(location, to: output, at: fraction) }).value
+                else {
+                    ThumbnailStore.markFailed(file.key)
+                    continue
+                }
+                if item.kind != .album {
+                    MediaLibrary.learn(fileKey: file.key, resolution: probe.resolutionLabel, duration: probe.duration, in: context)
+                }
             }
             item.posterPath = reference
             item.backdropPath = reference
@@ -217,7 +382,9 @@ final class LibraryScanner: ObservableObject {
     func identifyUnmatched(context: ModelContext) async {
         guard !isScanning, TMDbClient.current() == nil, let trakt = TraktMetadata.current() else { return }
         var attempted = Set(UserDefaults.standard.stringArray(forKey: Self.traktIdentifiedKey) ?? [])
-        let items = ((try? context.fetch(FetchDescriptor<LibraryItem>())) ?? []).filter { $0.tmdbID == nil && !attempted.contains($0.key) }
+        let items = ((try? context.fetch(FetchDescriptor<LibraryItem>())) ?? []).filter {
+            ($0.kind == .movie || $0.kind == .show) && $0.tmdbID == nil && !attempted.contains($0.key)
+        }
         guard !items.isEmpty else { return }
         isScanning = true
         defer { isScanning = false }
@@ -287,10 +454,14 @@ final class LibraryScanner: ObservableObject {
         return parsed
     }
 
-    private static func collect(fs: RemoteFileSystem, root: String, progress: @escaping (Int) -> Void) async throws -> [Found] {
+    private static let coverNames = ["cover", "folder", "front", "album", "albumart", "albumartsmall"]
+
+    /// Video files (with their subtitles), or audio tracks (with a cover image of their folder) for music folders.
+    private static func collect(fs: RemoteFileSystem, root: String, audio: Bool = false, progress: @escaping (Int) -> Void) async throws -> [Found] {
         var results: [Found] = []
         var queue: [(path: String, depth: Int, name: String)] = [(root, 0, (root as NSString).lastPathComponent)]
         var showFolderName: [String: String] = [:]
+        var parentName: [String: String] = [:]
         while !queue.isEmpty {
             let (path, depth, name) = queue.removeFirst()
             let items: [RemoteItem]
@@ -300,8 +471,17 @@ final class LibraryScanner: ObservableObject {
                 if depth == 0 { throw error }
                 continue
             }
+            if audio {
+                let tracks = items.filter(\.isAudio)
+                let images = items.filter { !$0.isDirectory && ["jpg", "jpeg", "png"].contains($0.fileExtension) && $0.size < 15_000_000 }
+                let cover = coverNames.lazy.compactMap { name in images.first { $0.baseName.lowercased() == name } }.first ?? images.first
+                for track in tracks {
+                    results.append(Found(item: track, parentName: name, subtitles: [], directory: path,
+                                         directoryParent: depth == 0 ? nil : parentName[path], cover: cover))
+                }
+            }
             let subtitles = items.filter(\.isSubtitle)
-            let videos = items.filter(\.isVideo)
+            let videos = audio ? [] : items.filter(\.isVideo)
             // A "Season 01" folder inherits its show's name.
             let parent = name.lowercased().hasPrefix("season") || name.lowercased().hasPrefix("mùa")
                 ? (showFolderName[path] ?? name) : name
@@ -315,6 +495,7 @@ final class LibraryScanner: ObservableObject {
             guard depth < maxDepth else { continue }
             for dir in items where dir.isDirectory && !skippedFolders.contains(dir.name.lowercased()) {
                 showFolderName[dir.path] = parent
+                if depth > 0 || audio { parentName[dir.path] = depth == 0 ? nil : name }
                 queue.append((dir.path, depth + 1, dir.name))
             }
         }

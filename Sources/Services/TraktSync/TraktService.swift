@@ -59,12 +59,13 @@ enum TraktMedia: Hashable {
                 if item.kind == .show, let season = file.season, let episode = file.episode {
                     return .episode(show: item.title, year: item.year, tmdb: item.tmdbID, season: season, number: episode)
                 }
-                // Unmatched home videos / concerts would only create noise on Trakt.
-                guard item.tmdbID != nil || item.year != nil else { return nil }
+                // Music videos and albums are not on Trakt; unmatched home videos would only create noise there.
+                guard item.kind == .movie, item.tmdbID != nil || item.year != nil else { return nil }
                 return .movie(title: item.title, year: item.year, tmdb: item.tmdbID)
             }
         }
-        guard let fallbackName else { return nil }
+        // Music files are never films or episodes.
+        guard let fallbackName, !FilenameParser.audioExtensions.contains((fallbackName as NSString).pathExtension.lowercased()) else { return nil }
         let parsed = FilenameParser.parse(fallbackName)
         switch parsed.kind {
         case let .episode(season, episode):

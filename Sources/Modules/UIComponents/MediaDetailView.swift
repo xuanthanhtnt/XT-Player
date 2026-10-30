@@ -87,8 +87,8 @@ struct LibraryGridView: View {
         switch filter {
         case .movies: list = allItems.filter { $0.kind == .movie }
         case .shows: list = allItems.filter { $0.kind == .show }
-        case .recent: return Array(allItems.sorted { $0.addedAt > $1.addedAt }.prefix(60))
-        case .unwatched: list = allItems.filter { index.isUnplayed($0) }
+        case .recent: return Array(allItems.filter { $0.kind == .movie || $0.kind == .show }.sorted { $0.addedAt > $1.addedAt }.prefix(60))
+        case .unwatched: list = allItems.filter { $0.kind != .album && index.isUnplayed($0) }
         case .topRated: list = allItems.filter { ($0.rating ?? 0) > 0 }
         }
         switch sort {
@@ -295,7 +295,7 @@ struct MediaDetailView: View {
         let entry = target.flatMap { entryByKey[$0.key] }
         return VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .bottomLeading) {
-                ArtworkImage(path: item.backdropPath ?? item.posterPath, size: "w1280", placeholderIcon: item.kind == .show ? "tv" : "film")
+                ArtworkImage(path: item.backdropPath ?? item.posterPath, size: "w1280", placeholderIcon: PosterCard.icon(item.kind))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .mask(
                         LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.5),
@@ -372,8 +372,11 @@ struct MediaDetailView: View {
         if resumable, let target {
             squareButton("arrow.counterclockwise", help: "Xem từ đầu") { start(item, at: target, fromBeginning: true) }
         }
-        squareButton("arrow.triangle.2.circlepath", help: "Làm mới thông tin TMDb") {
-            Task { await scanner.refresh(item, context: context) }
+        // Music videos are never looked up on TMDb.
+        if item.kind == .movie || item.kind == .show {
+            squareButton("arrow.triangle.2.circlepath", help: "Làm mới thông tin TMDb") {
+                Task { await scanner.refresh(item, context: context) }
+            }
         }
     }
 

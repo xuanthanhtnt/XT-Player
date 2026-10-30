@@ -151,6 +151,21 @@ enum ThumbnailStore {
         return directory.appendingPathComponent(String(path.dropFirst(prefix.count)))
     }
 
+    private static let failedKey = "artwork.failed"
+
+    /// A frame could not be taken from this file in the last week (no video, no embedded cover, unreadable).
+    static func recentlyFailed(_ key: String) -> Bool {
+        let failed = UserDefaults.standard.dictionary(forKey: failedKey) as? [String: Date] ?? [:]
+        guard let date = failed[key] else { return false }
+        return Date().timeIntervalSince(date) < 7 * 24 * 3600
+    }
+
+    static func markFailed(_ key: String) {
+        var failed = UserDefaults.standard.dictionary(forKey: failedKey) as? [String: Date] ?? [:]
+        failed[key] = .now
+        UserDefaults.standard.set(failed, forKey: failedKey)
+    }
+
     /// TMDb paths count as artwork; local ones only while their file exists.
     static func isUsable(_ path: String?) -> Bool {
         guard let path, !path.isEmpty else { return false }

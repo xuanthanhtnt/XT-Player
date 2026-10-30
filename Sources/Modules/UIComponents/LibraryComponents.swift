@@ -61,7 +61,7 @@ struct PosterCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ArtworkImage(path: item.posterPath, size: "w342", placeholderIcon: item.kind == .show ? "tv" : "film")
+            ArtworkImage(path: item.posterPath, size: "w342", placeholderIcon: Self.icon(item.kind))
                 .aspectRatio(2 / 3, contentMode: .fill)
                 .frame(width: Theme.posterWidth, height: Theme.posterWidth * 1.5)
                 .overlay(alignment: .topTrailing) {
@@ -91,6 +91,17 @@ struct PosterCard: View {
     }
 }
 
+extension PosterCard {
+    static func icon(_ kind: LibraryKind) -> String {
+        switch kind {
+        case .movie: return "film"
+        case .show: return "tv"
+        case .musicVideo: return "music.note.tv"
+        case .album: return "music.note"
+        }
+    }
+}
+
 /// Poster that opens the detail page, with progress / watched state.
 struct PosterLink: View {
     let item: LibraryItem
@@ -98,7 +109,7 @@ struct PosterLink: View {
 
     var body: some View {
         let state = index.progress(of: item)
-        NavigationLink(value: Route.detail(itemKey: item.key)) {
+        NavigationLink(value: item.kind == .album ? Route.album(itemKey: item.key) : Route.detail(itemKey: item.key)) {
             PosterCard(item: item, progress: state.progress, watched: state.watched)
         }
         .tileButtonStyle()

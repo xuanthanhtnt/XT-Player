@@ -15,7 +15,7 @@
 
 ---
 
-## Trạng thái: v0.2.9 — FFmpeg build riêng: DSD, WavPack, bitstream HDMI, nhạc hi-res
+## Trạng thái: v0.3.0 — thư viện Nhạc & Video ca nhạc, FFmpeg build riêng, nhạc hi-res
 
 | Hạng mục | Có trong v0.2.1 |
 |---|---|
@@ -27,7 +27,8 @@
 | Phụ đề | libass (.ass giữ hiệu ứng), .srt/.vtt/PGS; **tự nạp phụ đề cạnh file trên NAS**; lệch ±0,1 s; cỡ/vị trí/nền chữ |
 | Ổ mạng | **SMB2/3** (SMBClient thuần Swift, stream thẳng vào mpv qua `xtsmb://`, không transcode; **4 kết nối song song + đọc trước + cache khối**, tự kết nối lại khi NAS ngắt), **WebDAV** (HTTP/HTTPS, Basic/Digest, chứng chỉ tự ký), **tự tìm NAS bằng Bonjour**; **ảnh thu nhỏ từng video khi duyệt thư mục** (như Infuse), duyệt và phát cả **file nhạc**; mật khẩu trong Keychain |
 | Thư viện | Quét thư mục NAS, nhận diện phim / tập, **poster, backdrop, diễn viên, tóm tắt, tên & ảnh từng tập từ TMDb** — chưa có khoá TMDb thì **lấy từ Trakt** (tên & tóm tắt tiếng Việt, poster, diễn viên, tên tập); không có trên TMDb thì **lấy khung hình trong video làm ảnh bìa** (như Infuse); hàng *Tiếp tục xem*, kệ Phim / TV Shows, trang chi tiết, chọn mùa, đánh dấu đã xem |
-| Giao diện | Thanh bên (Mac / iPad / Apple TV) hoặc tab (iPhone); trên Mac nhóm kiểu Infuse: Tìm kiếm · Trang chủ · **Thư viện** (Phim, TV Shows, Mới thêm, Chưa xem, Điểm cao, Thể loại) · **Tệp** (từng máy chủ & thư mục) · **Cài đặt ghim cuối thanh bên** (⌘,); **banner nổi bật** tự xoay vòng, kệ *Tiếp tục xem* / *Mới thêm*; trang chi tiết kiểu Infuse (ảnh nền lớn, nút *Tiếp tục 00:12:15*, nút vuông, vạch tiến độ) |
+| Âm nhạc | Mỗi thư mục thư viện có **loại**: Phim & TV / **Video ca nhạc** / **Nhạc** (gợi ý theo tên thư mục, đổi được ở Nguồn ▸ Loại thư mục). Video ca nhạc không tra TMDb/Trakt (không khớp nhầm thành phim), ảnh từ khung hình; Nhạc thành **album** theo thư mục (nghệ sĩ, năm, đĩa CD1/CD2, số bài từ tên file, ảnh bìa cover.jpg hoặc ảnh nhúng), trang album có danh sách bài, Phát / Trộn bài, phát liền mạch sang bài sau; màn hình phát nhạc hiện ảnh bìa |
+| Giao diện | Thanh bên (Mac / iPad / Apple TV) hoặc tab (iPhone); trên Mac nhóm kiểu Infuse: Tìm kiếm · Trang chủ · **Thư viện** (Phim, TV Shows, Mới thêm, Chưa xem, Điểm cao, Thể loại) · **Âm nhạc** (Nhạc, Video ca nhạc) · **Tệp** (từng máy chủ & thư mục) · **Cài đặt ghim cuối thanh bên** (⌘,); **banner nổi bật** tự xoay vòng, kệ *Tiếp tục xem* / *Mới thêm*; trang chi tiết kiểu Infuse (ảnh nền lớn, nút *Tiếp tục 00:12:15*, nút vuông, vạch tiến độ) |
 | Player | Thanh điều khiển nổi (kính mờ), thanh tua có bong bóng thời gian + tên chương, **bảng ⚙︎ có tab** Âm thanh · Phụ đề · Video · Chương · Thông tin (codec, HDR, bitrate, đầu ra âm thanh, nhật ký libmpv), hàng đợi + **Up Next**, tốc độ 0.5–2×, Fit / Fill / Stretch, Now Playing, chạm đúp / vuốt để tua; **ảnh xem trước khi tua** (scrub thumbnails); **tìm & tải phụ đề OpenSubtitles** ngay trong bảng Phụ đề; **AirPlay lên Apple TV / TV AirPlay** (Mac, iPhone/iPad) |
 | Trakt | Đăng nhập bằng mã (cả Apple TV), **scrobble** khi xem, **đồng bộ đã xem và điểm xem tiếp** giữa Mac / iPhone / Apple TV (và Infuse nếu cũng nối Trakt); tự đồng bộ khi mở app, khi đóng trình phát và mỗi 15 phút; lỗi Trakt ghi trong nhật ký trình phát |
 | Cập nhật | Tự kiểm tra GitHub Releases mỗi ngày; Mac tải .dmg qua trình duyệt, iPhone/iPad mở trang tải; **Cài đặt ▸ Cập nhật** hoặc menu *Kiểm tra cập nhật…* |
@@ -155,6 +156,7 @@ Mở **Cài đặt ▸ Nhật ký trình phát** (hoặc nút ⓘ trong player �
 - [x] **v0.2.5**: Sửa cập nhật trên Mac (tải .dmg qua trình duyệt — bản 0.2.4 tải trong app bị macOS chặn mở)
 - [x] **v0.2.6**: Trakt với ứng dụng PKCE (chỉ cần Client ID, nhúng sẵn qua CI — chỉ bấm Kết nối Trakt rồi nhập mã)
 - [x] **v0.2.7**: Ảnh thu nhỏ từng video khi duyệt NAS; ảnh bìa cho file trên máy (WebM…) và WebDAV
+- [x] **v0.3.0**: tách Nhạc / Video ca nhạc khỏi Phim (loại thư mục, album theo thư mục, trang album, kệ trên Trang chủ, tab Nhạc trên iPhone/Apple TV), trình duyệt NAS chia mục Video / Nhạc, màn hình phát nhạc có ảnh bìa
 - [x] **v0.2.9**: FFmpeg build riêng (DSD, WavPack, MLP, TAK, Musepack, DTS/TrueHD rời, VVC, phụ đề PGS rời / VobSub / SAMI…), bitstream HDMI trên Mac chạy thật, Chế độ ban đêm nén dải động thật (dynaudnorm), Tăng thoại cho stereo (dialoguenhance), nhạc hi-res đúng tần số gốc trên iPhone/iPad/Apple TV, bảng Thông tin hi-res, duyệt & phát file nhạc trên NAS
 - [x] **v0.2.8**: chất lượng hình ảnh (Cân bằng / Cao / Tối đa), chuyển động mượt, nút giải mã phần cứng, Tăng thoại, sửa Chế độ ban đêm, khớp tần số lấy mẫu (Mac); sửa Trakt không scrobble; nhận diện phim qua Trakt khi chưa có khoá TMDb; "Chưa xem" chỉ còn mục chưa mở; Cài đặt ghim cuối thanh bên Mac
 - [ ] **v0.3**: Engine AVPlayer cho Dolby Vision và Atmos (Apple TV), song song với libmpv

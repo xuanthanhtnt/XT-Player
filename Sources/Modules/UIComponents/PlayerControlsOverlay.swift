@@ -328,7 +328,7 @@ struct PlayerControlsOverlay: View {
     }
 
     private var nextHelp: String {
-        hasNextChapter ? "Chương tiếp" : (hasNext ? "Tập tiếp (N)" : "Không có mục tiếp theo")
+        hasNextChapter ? "Chương tiếp" : (hasNext ? (engine.videoCodec.isEmpty ? "Bài tiếp (N)" : "Tập tiếp (N)") : "Không có mục tiếp theo")
     }
 
     private static let barHeight: CGFloat = 80

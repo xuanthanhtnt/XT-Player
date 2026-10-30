@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 enum Route: Hashable {
     case grid(kind: String)
     case detail(itemKey: String)
+    case album(itemKey: String)
     case browser(serverID: String, path: String, title: String)
     case addServer
     case settings
@@ -16,6 +17,7 @@ enum Route: Hashable {
 enum AppSection: Hashable {
     case home, movies, shows, sources, settings
     case search, recent, unwatched, topRated, genres
+    case musicVideos, music
     case server(String), folder(String)
 }
 
@@ -189,6 +191,10 @@ struct RootView: View {
                     sidebarRow("Điểm cao", "star", .topRated)
                     sidebarRow("Thể loại", "theatermasks", .genres)
                 }
+                Section("Âm nhạc") {
+                    sidebarRow("Nhạc", "music.note.list", .music)
+                    sidebarRow("Video ca nhạc", "music.note.tv", .musicVideos)
+                }
                 Section("Tệp") {
                     ForEach(servers) { server in
                         sidebarRow(server.name, server.kind.icon, .server(server.id))
@@ -240,6 +246,8 @@ struct RootView: View {
         case .unwatched: LibraryGridView(filter: .unwatched)
         case .topRated: LibraryGridView(filter: .topRated)
         case .genres: GenresView()
+        case .music: AlbumsView()
+        case .musicVideos: MusicVideosView()
         case .sources: SourcesView()
         case .settings: SettingsView()
         case let .server(id):
@@ -263,6 +271,9 @@ struct RootView: View {
             }
             Tab("TV Shows", systemImage: "tv.fill", value: AppSection.shows) {
                 NavigationStack { LibraryGridView(kind: .show).libraryRoutes() }
+            }
+            Tab("Nhạc", systemImage: "music.note", value: AppSection.music) {
+                NavigationStack { MusicLibraryView().libraryRoutes() }
             }
             Tab("Nguồn", systemImage: "externaldrive.connected.to.line.below.fill", value: AppSection.sources) {
                 NavigationStack { SourcesView().libraryRoutes() }
@@ -321,9 +332,15 @@ private struct LibraryRoutes: ViewModifier {
         content.navigationDestination(for: Route.self) { route in
             switch route {
             case let .grid(kind):
-                LibraryGridView(kind: LibraryKind(rawValue: kind) ?? .movie)
+                switch LibraryKind(rawValue: kind) ?? .movie {
+                case .album: AlbumsView()
+                case .musicVideo: MusicVideosView()
+                case let other: LibraryGridView(kind: other)
+                }
             case let .detail(itemKey):
                 MediaDetailView(itemKey: itemKey)
+            case let .album(itemKey):
+                AlbumDetailView(itemKey: itemKey)
             case let .browser(serverID, path, title):
                 BrowserView(serverID: serverID, path: path, title: title)
             case .addServer:
