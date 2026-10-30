@@ -15,7 +15,7 @@
 
 ---
 
-## Trạng thái: v0.2.5 — Trakt, xem trước khi tua, phụ đề OpenSubtitles, AirPlay
+## Trạng thái: v0.2.6 — Trakt, xem trước khi tua, phụ đề OpenSubtitles, AirPlay
 
 | Hạng mục | Có trong v0.2.1 |
 |---|---|
@@ -150,6 +150,7 @@ Mở **Cài đặt ▸ Nhật ký trình phát** (hoặc nút ⓘ trong player �
 - [x] **v0.2.3**: macOS chỉnh được âm lượng khi bật Bitstream HDMI (chỉ dùng chế độ độc quyền lúc thật sự bitstream)
 - [x] **v0.2.4**: Trakt.tv (scrobble, đã xem, điểm xem tiếp giữa các thiết bị), ảnh xem trước khi tua, phụ đề OpenSubtitles, thời lượng / độ phân giải cho phim không có trên TMDb
 - [x] **v0.2.5**: Sửa cập nhật trên Mac (tải .dmg qua trình duyệt — bản 0.2.4 tải trong app bị macOS chặn mở)
+- [x] **v0.2.6**: Trakt với ứng dụng PKCE (chỉ cần Client ID, nhúng sẵn qua CI — chỉ bấm Kết nối Trakt rồi nhập mã)
 - [ ] **v0.3**: Engine AVPlayer cho Dolby Vision và Atmos (Apple TV), song song với libmpv
 - [ ] **v0.4**: Top Shelf (tvOS), Jellyfin / Emby / Plex
 - [ ] **v0.5**: iCloud
