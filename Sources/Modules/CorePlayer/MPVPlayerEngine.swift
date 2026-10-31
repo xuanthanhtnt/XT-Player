@@ -391,6 +391,10 @@ final class MPVPlayerEngine: ObservableObject {
     @Published private(set) var hardwareDecoding = true
     @Published private(set) var pictureQuality = PictureQuality.platformDefault
     @Published private(set) var motionSmoothing = false
+    /// ReplayGain levelling (music).
+    @Published private(set) var volumeLeveling = false
+    /// macOS: the output device follows the file's sample rate.
+    @Published private(set) var matchSampleRate = false
     /// Frames dropped because decoding or rendering could not keep up (a hint to lower the picture quality).
     @Published private(set) var droppedFrames = 0
     /// Index of the playing entry of mpv's own playlist (music queue), -1 = none.
@@ -456,6 +460,33 @@ final class MPVPlayerEngine: ObservableObject {
         hardwareDecoding = options.hardwareDecoding
         pictureQuality = options.pictureQuality
         motionSmoothing = options.motionSmoothing
+        volumeLeveling = options.volumeLeveling
+        matchSampleRate = options.matchSampleRate
+        // Settings changed while something plays apply to it right away (the setters below write the same keys,
+        // so their own writes come back as no-ops).
+        notificationTokens.append(NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.followSettings()
+        })
+    }
+
+    private func followSettings() {
+        let d = UserDefaults.standard
+        if d.bool(forKey: AppSettings.nightMode) != nightMode { setNightMode(!nightMode) }
+        if d.bool(forKey: AppSettings.dialogBoost) != dialogBoost { setDialogBoost(!dialogBoost) }
+        if d.bool(forKey: AppSettings.volumeLeveling) != volumeLeveling { setVolumeLeveling(!volumeLeveling) }
+        #if os(macOS)
+        if d.bool(forKey: AppSettings.matchSampleRate) != matchSampleRate { setMatchSampleRate(!matchSampleRate) }
+        #endif
+        guard !audioOnly else { return }
+        let hardware = d.object(forKey: AppSettings.hardwareDecoding) as? Bool ?? true
+        if hardware != hardwareDecoding { setHardwareDecoding(hardware) }
+        if let quality = PictureQuality(rawValue: d.string(forKey: AppSettings.pictureQuality) ?? ""), quality != pictureQuality {
+            setPictureQuality(quality)
+        }
+        #if !os(tvOS)
+        let motion = d.bool(forKey: AppSettings.motionSmoothing)
+        if motion != motionSmoothing { setMotionSmoothing(motion) }
+        #endif
     }
 
     deinit {
@@ -656,6 +687,7 @@ final class MPVPlayerEngine: ObservableObject {
     func selectAudioDevice(_ name: String) {
         audioDevice = name
         setProperty("audio-device", name)
+        refreshDeviceRateSoon()
     }
 
     /// iPhone / iPad / Apple TV: ask the audio session for the file's sample rate. A USB or Lightning DAC (and
@@ -701,6 +733,40 @@ final class MPVPlayerEngine: ObservableObject {
         queue.async {
             self.wantsDialogBoost = enabled
             if let mpv = self.handle { self.applyAudioEnhancements(mpv) }
+        }
+    }
+
+    /// ReplayGain / R128 album gain, applied to what is playing.
+    func setVolumeLeveling(_ enabled: Bool) {
+        volumeLeveling = enabled
+        UserDefaults.standard.set(enabled, forKey: AppSettings.volumeLeveling)
+        if enabled {
+            setProperty("replaygain-clip", "no")
+            setProperty("replaygain-fallback", "0")
+        }
+        setProperty("replaygain", enabled ? "album" : "no")
+    }
+
+    /// macOS: switch the output device to the file's rate (or stop doing so); the audio output reopens.
+    func setMatchSampleRate(_ enabled: Bool) {
+        matchSampleRate = enabled
+        UserDefaults.standard.set(enabled, forKey: AppSettings.matchSampleRate)
+        queue.async {
+            guard let mpv = self.handle else { return }
+            mpv_set_property_string(mpv, "coreaudio-change-physical-format", enabled ? "yes" : "no")
+            self.command(["ao-reload"])
+        }
+        refreshDeviceRateSoon()
+    }
+
+    /// The device's own rate can change without mpv's output format changing (another rate matched, another
+    /// device picked): read it again once the output has reopened.
+    private func refreshDeviceRateSoon() {
+        for delay in [0.6, 1.6] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else { return }
+                self.audio.deviceSampleRate = AudioHardware.sampleRate(device: self.audioDevice)
+            }
         }
     }
 
@@ -1078,7 +1144,10 @@ final class MPVPlayerEngine: ObservableObject {
             publish { $0.hardwareDecoder = v }
         case "current-ao":
             let v = string()
-            publish { $0.audioOutput = v }
+            publish {
+                $0.audioOutput = v
+                $0.refreshDeviceRateSoon()
+            }
         case "video-bitrate":
             let v = double()
             publish { $0.videoBitrate = v }

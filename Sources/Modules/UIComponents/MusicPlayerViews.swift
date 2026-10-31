@@ -216,16 +216,37 @@ private struct NowPlayingContent: View {
         }
         .foregroundStyle(.white)
         .overlay(alignment: .topLeading) {
-            MusicButton("chevron.down", size: 18) { music.showsNowPlaying = false }
-                .padding(.top, 20).padding(.leading, 20)
+            // A labelled button (and Esc) so the way back to the library is obvious.
+            Button { music.showsNowPlaying = false } label: {
+                Label("Thu nhỏ", systemImage: "chevron.down")
+                    .font(.callout.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .contentShape(Capsule())
+            }
+            #if !os(tvOS)
+            .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+            .help("Về thư viện (Esc)")
+            #endif
+            .padding(.top, 16).padding(.leading, 20)
         }
         .overlay(alignment: .topTrailing) {
-            MusicButton("list.bullet", size: 18) { withAnimation(.easeInOut(duration: 0.25)) { showsQueue.toggle() } }
-                .foregroundStyle(showsQueue ? Theme.leaf : .white)
-                .padding(.top, 20).padding(.trailing, 20)
+            HStack(spacing: 8) {
+                AudioOptionsMenu(engine: engine)
+                MusicButton("list.bullet", size: 18) { withAnimation(.easeInOut(duration: 0.25)) { showsQueue.toggle() } }
+                    .foregroundStyle(showsQueue ? Theme.leaf : .white)
+            }
+            .padding(.top, 16).padding(.trailing, 20)
         }
-        #if os(macOS)
-        .onExitCommand { music.showsNowPlaying = false }
+        #if os(iOS)
+        // A full-screen cover cannot be swiped away on its own: pull down to go back, as in Music.
+        .gesture(DragGesture(minimumDistance: 30).onEnded { value in
+            if value.translation.height > 120, abs(value.translation.width) < value.translation.height {
+                music.showsNowPlaying = false
+            }
+        })
         #elseif os(tvOS)
         .onExitCommand { music.showsNowPlaying = false }
         .onPlayPauseCommand { music.togglePause() }
@@ -234,6 +255,33 @@ private struct NowPlayingContent: View {
 
     private func cover(_ size: CGSize) -> CGFloat {
         min(420, size.width * 0.7, size.height * 0.42)
+    }
+}
+
+/// Sound processing for what is playing (the same switches as Settings ▸ Âm thanh), next to the queue button.
+private struct AudioOptionsMenu: View {
+    @ObservedObject var engine: MPVPlayerEngine
+
+    var body: some View {
+        Menu {
+            Toggle("Tăng thoại", isOn: Binding(get: { engine.dialogBoost }, set: { engine.setDialogBoost($0) }))
+            Toggle("Chế độ ban đêm", isOn: Binding(get: { engine.nightMode }, set: { engine.setNightMode($0) }))
+            Toggle("Cân bằng âm lượng (ReplayGain)", isOn: Binding(get: { engine.volumeLeveling }, set: { engine.setVolumeLeveling($0) }))
+            #if os(macOS)
+            Toggle("Khớp tần số lấy mẫu với thiết bị", isOn: Binding(get: { engine.matchSampleRate }, set: { engine.setMatchSampleRate($0) }))
+            #endif
+        } label: {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 36, height: 32)
+                .contentShape(Rectangle())
+        }
+        #if os(macOS)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        #endif
+        .help("Xử lý âm thanh")
     }
 }
 

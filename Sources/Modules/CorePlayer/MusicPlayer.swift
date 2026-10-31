@@ -319,7 +319,7 @@ struct SignalPath {
         }
         if engine.dialogBoost { steps.append("Tăng thoại") }
         if engine.nightMode { steps.append("Chế độ ban đêm") }
-        if engine.options.volumeLeveling { steps.append("Cân bằng âm lượng (ReplayGain)") }
+        if engine.volumeLeveling { steps.append("Cân bằng âm lượng (ReplayGain)") }
         if engine.isMuted { steps.append("Tắt tiếng") } else if abs(engine.volume - 100) > 0.5 { steps.append("Âm lượng \(Int(engine.volume)) %") }
         processing = steps
         let deviceRate = audio.deviceSampleRate > 0 ? InfoPanel.kHz(audio.deviceSampleRate) : ""
@@ -330,7 +330,7 @@ struct SignalPath {
             grade = .unknown
         } else if !Self.lossless.contains(audio.codec) {
             grade = .lossy
-        } else if engine.dialogBoost || engine.nightMode || engine.options.volumeLeveling {
+        } else if engine.dialogBoost || engine.nightMode || engine.volumeLeveling {
             grade = .enhanced
         } else if steps.isEmpty {
             grade = .bitPerfect

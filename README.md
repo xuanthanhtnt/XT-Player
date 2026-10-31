@@ -15,7 +15,7 @@
 
 ---
 
-## Trạng thái: v0.3.1 — trình phát nhạc kiểu Roon, thư viện Nhạc & Video ca nhạc, nhạc hi-res
+## Trạng thái: v0.3.2 — trình phát nhạc kiểu Roon, thư viện Nhạc & Video ca nhạc, nhạc hi-res
 
 | Hạng mục | Có trong v0.2.1 |
 |---|---|
@@ -157,6 +157,7 @@ Mở **Cài đặt ▸ Nhật ký trình phát** (hoặc nút ⓘ trong player �
 - [x] **v0.2.5**: Sửa cập nhật trên Mac (tải .dmg qua trình duyệt — bản 0.2.4 tải trong app bị macOS chặn mở)
 - [x] **v0.2.6**: Trakt với ứng dụng PKCE (chỉ cần Client ID, nhúng sẵn qua CI — chỉ bấm Kết nối Trakt rồi nhập mã)
 - [x] **v0.2.7**: Ảnh thu nhỏ từng video khi duyệt NAS; ảnh bìa cho file trên máy (WebM…) và WebDAV
+- [x] **v0.3.2**: đổi chế độ âm thanh áp dụng ngay cho bài đang phát (chấm chất lượng đổi theo), nút “Thu nhỏ” + Esc ở màn hình Đang phát, menu xử lý âm thanh trong Đang phát
 - [x] **v0.3.1**: trình phát nhạc kiểu Roon (phát nền, thanh đang phát, Đang phát + hàng đợi, gapless, đường tín hiệu, Nghệ sĩ, ReplayGain)
 - [x] **v0.3.0**: tách Nhạc / Video ca nhạc khỏi Phim (loại thư mục, album theo thư mục, trang album, kệ trên Trang chủ, tab Nhạc trên iPhone/Apple TV), trình duyệt NAS chia mục Video / Nhạc, màn hình phát nhạc có ảnh bìa
 - [x] **v0.2.9**: FFmpeg build riêng (DSD, WavPack, MLP, TAK, Musepack, DTS/TrueHD rời, VVC, phụ đề PGS rời / VobSub / SAMI…), bitstream HDMI trên Mac chạy thật, Chế độ ban đêm nén dải động thật (dynaudnorm), Tăng thoại cho stereo (dialoguenhance), nhạc hi-res đúng tần số gốc trên iPhone/iPad/Apple TV, bảng Thông tin hi-res, duyệt & phát file nhạc trên NAS
