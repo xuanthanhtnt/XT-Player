@@ -20,6 +20,18 @@ struct TMDbClient {
 
     static func imageURL(_ path: String?, size: String = "w500") -> URL? {
         guard let path, !path.isEmpty else { return nil }
+        if let local = ThumbnailStore.url(for: path) { return local }
+        if path.hasPrefix("http") {
+            // Trakt artwork (no TMDb key): its CDN has thumb / medium / full renditions of each image.
+            guard TraktMetadata.isTraktImage(path) else { return URL(string: path) }
+            let rendition: String
+            switch size {
+            case "w92", "w154", "w185", "w300": rendition = "thumb"
+            case "w342", "w500", "w780": rendition = "medium"
+            default: rendition = "full"
+            }
+            return URL(string: path.replacingOccurrences(of: "/medium/", with: "/\(rendition)/"))
+        }
         return URL(string: "https://image.tmdb.org/t/p/\(size)\(path)")
     }
 

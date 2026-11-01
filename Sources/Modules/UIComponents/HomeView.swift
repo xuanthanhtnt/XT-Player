@@ -29,9 +29,9 @@ struct HomeView: View {
                 }
                 if scanner.isScanning || scanner.lastError != nil { scanBanner }
                 if !continueWatching.isEmpty { continueRow }
-                if !items.isEmpty {
+                if !filmsAndShows.isEmpty {
                     ShelfRow(title: "Mới thêm") {
-                        ForEach(items.prefix(20)) { posterLink($0, index: index) }
+                        ForEach(filmsAndShows.prefix(20)) { posterLink($0, index: index) }
                     }
                 }
                 if !movies.isEmpty {
@@ -42,6 +42,16 @@ struct HomeView: View {
                 if !shows.isEmpty {
                     ShelfRow(title: "TV Shows", seeAll: .grid(kind: LibraryKind.show.rawValue)) {
                         ForEach(shows.prefix(24)) { posterLink($0, index: index) }
+                    }
+                }
+                if !musicVideos.isEmpty {
+                    ShelfRow(title: "Video ca nhạc", seeAll: .grid(kind: LibraryKind.musicVideo.rawValue)) {
+                        ForEach(musicVideos.prefix(20)) { MusicVideoLink(item: $0, index: index) }
+                    }
+                }
+                if !albums.isEmpty {
+                    ShelfRow(title: "Nhạc", seeAll: .grid(kind: LibraryKind.album.rawValue)) {
+                        ForEach(albums.prefix(20)) { AlbumLink(item: $0, index: index) }
                     }
                 }
             }
@@ -73,7 +83,15 @@ struct HomeView: View {
 
     private var movies: [LibraryItem] { items.filter { $0.kind == .movie } }
     private var shows: [LibraryItem] { items.filter { $0.kind == .show } }
-    private var continueWatching: [MediaEntry] { Array(entries.filter { $0.resumePosition != nil }.prefix(16)) }
+    private var filmsAndShows: [LibraryItem] { items.filter { $0.kind == .movie || $0.kind == .show } }
+    private var musicVideos: [LibraryItem] { items.filter { $0.kind == .musicVideo } }
+    private var albums: [LibraryItem] { items.filter { $0.kind == .album } }
+    /// Films and episodes left half-watched (music is resumed from its album, not from here).
+    private var continueWatching: [MediaEntry] {
+        Array(entries.filter {
+            $0.resumePosition != nil && !FilenameParser.audioExtensions.contains(($0.urlString as NSString).pathExtension.lowercased())
+        }.prefix(16))
+    }
 
     /// In-progress titles first, then the newest additions with artwork.
     private func featuredItems(_ index: LibraryIndex) -> [LibraryItem] {
@@ -82,10 +100,11 @@ struct HomeView: View {
         for entry in continueWatching {
             if let item = index.item(forFileKey: entry.key, in: items), seen.insert(item.key).inserted { picked.append(item) }
         }
-        for item in items where item.backdropPath != nil && seen.insert(item.key).inserted {
+        for item in items where item.kind != .album && item.backdropPath != nil && seen.insert(item.key).inserted {
             picked.append(item)
         }
-        if picked.isEmpty, let first = items.first { picked = [first] }
+        picked.removeAll { $0.kind == .album }
+        if picked.isEmpty, let first = items.first(where: { $0.kind != .album }) { picked = [first] }
         return Array(picked.prefix(6))
     }
 
@@ -129,7 +148,7 @@ struct HomeView: View {
 
     private func posterLink(_ item: LibraryItem, index: LibraryIndex) -> some View {
         let state = index.progress(of: item)
-        return NavigationLink(value: Route.detail(itemKey: item.key)) {
+        return NavigationLink(value: item.kind == .album ? Route.album(itemKey: item.key) : Route.detail(itemKey: item.key)) {
             PosterCard(item: item, progress: state.progress, watched: state.watched)
         }
         .tileButtonStyle()
@@ -197,7 +216,7 @@ struct FeaturedHero: View {
                 )
 
             VStack(alignment: .leading, spacing: 12) {
-                Text(item.kind == .show ? "TV SHOW" : "PHIM")
+                Text(item.kind == .show ? "TV SHOW" : item.kind == .musicVideo ? "VIDEO CA NHẠC" : "PHIM")
                     .font(.caption.weight(.heavy))
                     .tracking(2)
                     .foregroundStyle(Theme.leaf)
@@ -381,10 +400,18 @@ struct LibraryIndex {
         return sorted.first { !(entriesByKey[$0.key]?.isWatched ?? false) } ?? sorted.first
     }
 
+    /// "Unwatched": a film never played (in progress counts as played, as in Infuse); a show with an episode
+    /// not played yet.
+    func isUnplayed(_ item: LibraryItem) -> Bool {
+        let files = filesByItem[item.key] ?? []
+        let unplayed: (LibraryFile) -> Bool = { !(entriesByKey[$0.key]?.isStarted ?? false) }
+        return item.kind == .show ? files.contains(where: unplayed) : files.allSatisfy(unplayed)
+    }
+
     func progress(of item: LibraryItem) -> (progress: Double?, watched: Bool) {
         let files = filesByItem[item.key] ?? []
         let mine = files.compactMap { entriesByKey[$0.key] }
-        if item.kind == .movie {
+        if item.kind == .movie || item.kind == .musicVideo {
             let best = mine.max { ($0.progress ?? 0) < ($1.progress ?? 0) }
             return (best?.resumePosition != nil ? best?.progress : nil, best?.isWatched ?? false)
         }

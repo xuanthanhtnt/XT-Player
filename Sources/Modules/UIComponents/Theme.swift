@@ -89,6 +89,12 @@ enum TimeFormat {
         let h = total / 3600, m = (total % 3600) / 60, s = total % 60
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
     }
+
+    /// Always with hours, as on Infuse's Resume button: "00:12:15".
+    static func fullClock(_ seconds: Double) -> String {
+        let total = seconds.isFinite && seconds > 0 ? Int(seconds.rounded(.down)) : 0
+        return String(format: "%02d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
+    }
 }
 
 extension View {

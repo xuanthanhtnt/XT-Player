@@ -1,0 +1,115 @@
+--- a/Sources/BuildScripts/XCFrameworkBuild/main.swift
++++ b/Sources/BuildScripts/XCFrameworkBuild/main.swift
+@@ -17,11 +17,7 @@
+     try BuildHarfbuzz().buildALL()
+     try BuildASS().buildALL()
+ 
+-    // libsmbclient
+-    try BuildSmbclient().buildALL()
+-
+-    // libbluray
+-    try BuildBluray().buildALL()
++    // XT-Player: only FFmpeg is rebuilt; Libmpv, libbluray, uchardet, LuaJIT come from the MPVKit release.
+     
+     // ffmpeg
+     try BuildUavs3d().buildALL()
+@@ -33,10 +29,7 @@
+     try BuildDav1d().buildALL()
+     try BuildFFMPEG().buildALL()
+ 
+-    // mpv
+-    try BuildUchardet().buildALL()
+-    try BuildLuaJIT().buildALL()
+-    try BuildMPV().buildALL()
++    // mpv: taken from the MPVKit release (same FFmpeg API).
+ } catch {
+     print(error.localizedDescription)
+     exit(1)
+@@ -601,7 +594,7 @@
+             arguments.append("--enable-neon")
+             arguments.append("--enable-asm")
+         }
+-        if platform == .macos, arch.executable {
++        if false {
+             arguments.append("--enable-ffplay")
+             arguments.append("--enable-sdl2")
+             arguments.append("--enable-decoder=rawvideo")
+@@ -684,6 +677,8 @@
+         "--enable-muxer=flac", "--enable-muxer=dash", "--enable-muxer=hevc",
+         "--enable-muxer=m4v", "--enable-muxer=matroska", "--enable-muxer=mov", "--enable-muxer=mp4",
+         "--enable-muxer=mpegts", "--enable-muxer=webm*",
++        // XT-Player: IEC 61937 for bitstreaming AC3 / E-AC3 / DTS / DTS-HD / TrueHD (MAT) over HDMI.
++        "--enable-muxer=spdif",
+         // ./configure --list-encoders
+         "--disable-encoders",
+         "--enable-encoder=aac", "--enable-encoder=alac", "--enable-encoder=flac", "--enable-encoder=pcm*",
+@@ -706,6 +701,18 @@
+         "--enable-demuxer=ogg", "--enable-demuxer=rm", "--enable-demuxer=rtsp", "--enable-demuxer=rtp",
+         "--enable-demuxer=srt", "--enable-demuxer=webvtt",
+         "--enable-demuxer=vc1", "--enable-demuxer=wav", "--enable-demuxer=webm_dash_manifest",
++        // XT-Player: hi-res music (DSD, WavPack, Wave64, TTA, TAK, Musepack, Shorten), raw Blu-ray / DVD-Audio
++        // tracks (.dts .dtshd .thd .mlp), DTS / AC3 in WAV (spdif), PGS / VobSub / text subtitles, other containers.
++        "--enable-demuxer=dsf", "--enable-demuxer=iff", "--enable-demuxer=wv", "--enable-demuxer=w64",
++        "--enable-demuxer=tta", "--enable-demuxer=tak", "--enable-demuxer=mpc", "--enable-demuxer=mpc8",
++        "--enable-demuxer=shorten", "--enable-demuxer=xwma",
++        "--enable-demuxer=dts", "--enable-demuxer=dtshd", "--enable-demuxer=truehd", "--enable-demuxer=mlp",
++        "--enable-demuxer=spdif",
++        "--enable-demuxer=sup", "--enable-demuxer=vobsub", "--enable-demuxer=microdvd", "--enable-demuxer=subviewer",
++        "--enable-demuxer=subviewer1", "--enable-demuxer=sami", "--enable-demuxer=realtext", "--enable-demuxer=vplayer",
++        "--enable-demuxer=pjs", "--enable-demuxer=stl", "--enable-demuxer=jacosub", "--enable-demuxer=lrc",
++        "--enable-demuxer=mxf", "--enable-demuxer=nut", "--enable-demuxer=ivf", "--enable-demuxer=obu",
++        "--enable-demuxer=vvc", "--enable-demuxer=wtv",
+         // ./configure --list-bsfs
+         "--enable-bsfs",
+         // ./configure --list-decoders
+@@ -733,11 +740,24 @@
+         "--enable-decoder=mp1*", "--enable-decoder=mp2*", "--enable-decoder=mp3*", "--enable-decoder=opus",
+         "--enable-decoder=pcm*",
+         "--enable-decoder=truehd", "--enable-decoder=tta", "--enable-decoder=vorbis", "--enable-decoder=wma*",
++        // XT-Player: DSD (DSF / DFF / SACD DST), WavPack, DVD-Audio MLP, TAK, Musepack, Shorten, MPEG-4 ALS.
++        "--enable-decoder=dsd_lsbf", "--enable-decoder=dsd_msbf", "--enable-decoder=dsd_lsbf_planar",
++        "--enable-decoder=dsd_msbf_planar", "--enable-decoder=dst", "--enable-decoder=wavpack", "--enable-decoder=mlp",
++        "--enable-decoder=tak", "--enable-decoder=mpc7", "--enable-decoder=mpc8", "--enable-decoder=shorten",
++        "--enable-decoder=als",
++        // XT-Player: H.266 / VVC, Theora, old MS / QuickTime / DNxHD video, and cover art (PNG / BMP / GIF / WebP).
++        "--enable-decoder=vvc", "--enable-decoder=theora", "--enable-decoder=vp3", "--enable-decoder=msmpeg4*",
++        "--enable-decoder=dnxhd", "--enable-decoder=cfhd", "--enable-decoder=cinepak", "--enable-decoder=qtrle",
++        "--enable-decoder=utvideo", "--enable-decoder=magicyuv", "--enable-decoder=jpeg2000",
++        "--enable-decoder=png", "--enable-decoder=bmp", "--enable-decoder=gif", "--enable-decoder=webp",
+         // 字幕
+         "--enable-decoder=ass", "--enable-decoder=ccaption", "--enable-decoder=dvbsub", "--enable-decoder=dvdsub",
+         "--enable-decoder=mpl2", "--enable-decoder=movtext",
+         "--enable-decoder=pgssub", "--enable-decoder=srt", "--enable-decoder=ssa", "--enable-decoder=subrip",
+         "--enable-decoder=xsub", "--enable-decoder=webvtt",
++        "--enable-decoder=microdvd", "--enable-decoder=subviewer", "--enable-decoder=subviewer1", "--enable-decoder=sami",
++        "--enable-decoder=realtext", "--enable-decoder=vplayer", "--enable-decoder=pjs", "--enable-decoder=stl",
++        "--enable-decoder=jacosub", "--enable-decoder=text",
+ 
+         // ./configure --list-filters
+         "--disable-filters",
+@@ -754,6 +774,12 @@
+         "--enable-filter=scale", "--enable-filter=setpts", "--enable-filter=superequalizer",
+         "--enable-filter=transpose", "--enable-filter=trim",
+         "--enable-filter=vflip", "--enable-filter=volume",
++        // XT-Player: night mode / loudness (compressors, limiter, EBU R128), dialogue enhancement, stereo → 5.1
++        // upmix, stereo tools, tone controls.
++        "--enable-filter=dynaudnorm", "--enable-filter=loudnorm", "--enable-filter=acompressor", "--enable-filter=alimiter",
++        "--enable-filter=compand", "--enable-filter=speechnorm", "--enable-filter=dialoguenhance", "--enable-filter=surround",
++        "--enable-filter=extrastereo", "--enable-filter=stereotools", "--enable-filter=earwax", "--enable-filter=asoftclip",
++        "--enable-filter=highpass", "--enable-filter=lowpass", "--enable-filter=bass", "--enable-filter=treble",
+         "--enable-filter=w3fdif",
+         "--enable-filter=yadif",
+         "--enable-filter=avgblur_vulkan", "--enable-filter=blend_vulkan", "--enable-filter=bwdif_vulkan",
+--- a/Sources/BuildScripts/XCFrameworkBuild/base.swift
++++ b/Sources/BuildScripts/XCFrameworkBuild/base.swift
+@@ -1337,6 +1337,10 @@
+         }
+         if !environment.keys.contains("PATH") {
+             environment["PATH"] = BaseBuild.defaultPath
++        }
++        // XT-Player: xcode-select may point at the Command Line Tools (no iOS / tvOS SDKs); pass Xcode through.
++        if let developerDir = ProcessInfo.processInfo.environment["DEVELOPER_DIR"] {
++            environment["DEVELOPER_DIR"] = developerDir
+         }
+         task.environment = environment
+ 

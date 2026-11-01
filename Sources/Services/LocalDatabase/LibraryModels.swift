@@ -110,6 +110,65 @@ final class LibraryFolder {
 enum LibraryKind: String {
     case movie
     case show
+    /// Concerts, music videos, live shows: kept out of Films and never looked up on TMDb / Trakt.
+    case musicVideo
+    /// A folder of audio tracks. Its files are the tracks: `episode` = track number, `season` = disc,
+    /// `episodeTitle` = track title; the album artist is kept in `tagline` (see `artist`).
+    case album
+}
+
+/// What a library folder holds, which decides how its files are recognised. Kept in UserDefaults by folder key,
+/// so the SwiftData store needs no migration (a failed one would replace the store).
+enum LibraryFolderKind: String, CaseIterable, Identifiable {
+    case films, musicVideos, music
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .films: return "Phim & TV"
+        case .musicVideos: return "Video ca nhạc"
+        case .music: return "Nhạc"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .films: return "film"
+        case .musicVideos: return "music.note.tv"
+        case .music: return "music.note.list"
+        }
+    }
+
+    private static let storeKey = "library.folderKinds"
+
+    static func of(_ folderKey: String) -> LibraryFolderKind {
+        let stored = UserDefaults.standard.dictionary(forKey: storeKey) as? [String: String]
+        return stored?[folderKey].flatMap(LibraryFolderKind.init(rawValue:)) ?? .films
+    }
+
+    static func set(_ kind: LibraryFolderKind?, for folderKey: String) {
+        var stored = UserDefaults.standard.dictionary(forKey: storeKey) as? [String: String] ?? [:]
+        stored[folderKey] = kind?.rawValue
+        UserDefaults.standard.set(stored, forKey: storeKey)
+    }
+
+    /// First guess when a folder is added. Its name first: "Music Videos", "MV", "Concert", "Live", "Karaoke",
+    /// "Ca nhạc" → music videos; "Music", "Nhạc", "Audio", "Albums", "Lossless", "FLAC", "DSD" → music. Otherwise
+    /// what it holds: mostly audio → music, else films.
+    static func guess(name: String, items: [RemoteItem]) -> LibraryFolderKind {
+        let folded = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        let words = Set(folded.split { !$0.isLetter && !$0.isNumber }.map(String.init))
+        if folded.contains("music video") || folded.contains("ca nhac") || folded.contains("video nhac")
+            || !words.isDisjoint(with: ["mv", "mvs", "concert", "concerts", "live", "karaoke", "liveshow"]) {
+            return .musicVideos
+        }
+        if !words.isDisjoint(with: ["music", "nhac", "audio", "album", "albums", "songs", "lossless", "flac", "dsd", "sacd", "hires"]) {
+            return .music
+        }
+        let audio = items.filter(\.isAudio).count, video = items.filter(\.isVideo).count
+        return audio > 0 && audio >= video ? .music : .films
+    }
 }
 
 /// A movie or a TV show, enriched from TMDb when an API key is configured.
@@ -145,6 +204,9 @@ final class LibraryItem {
     }
 
     var kind: LibraryKind { LibraryKind(rawValue: kindRaw) ?? .movie }
+
+    /// Album artist (albums keep it in `tagline`); music videos keep their folder (artist / show) there too.
+    var artist: String? { kind == .album || kind == .musicVideo ? tagline : nil }
 
     var castMembers: [CastMember] {
         cast.compactMap { raw in

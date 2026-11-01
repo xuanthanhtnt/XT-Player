@@ -13,7 +13,7 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "0.2.1"
+    MARKETING_VERSION: "0.3.3"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
     PRODUCT_NAME: XTPlayer
@@ -24,6 +24,9 @@ settings:
     GENERATE_INFOPLIST_FILE: YES
     INFOPLIST_FILE: Config/Info.plist
     TMDB_API_KEY: ""
+    OPENSUBTITLES_API_KEY: ""
+    TRAKT_CLIENT_ID: ""
+    TRAKT_CLIENT_SECRET: ""
     INFOPLIST_KEY_CFBundleDisplayName: XT-Player
     INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.entertainment
     INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
@@ -41,10 +44,9 @@ settings:
 
 packages:
   MPVKit:
-    # libmpv 0.41 + FFmpeg 9.0.2 prebuilt for iOS / tvOS / macOS (MoltenVK, libplacebo, libass, libdovi).
-    # Switch the product below to "MPVKit-GPL" to get native smb:// playback inside mpv (GPL licence).
-    url: https://github.com/mpvkit/MPVKit
-    exactVersion: 1.1.0-n9.0.2
+    # libmpv 0.41 + FFmpeg 9.0.2 for iOS / tvOS / macOS (MoltenVK, libplacebo, libass, libdovi): MPVKit's release
+    # binaries, with FFmpeg rebuilt by XT-Player for more formats and S/PDIF bitstreaming (Packages/MPVKit/README.md).
+    path: Packages/MPVKit
   SMBClient:
     # Pure-Swift SMB2/3 over Network.framework (MIT) — browsing + streaming into mpv via xtsmb://.
     url: https://github.com/kishikawakatsumi/SMBClient
@@ -92,6 +94,9 @@ targets:
         product: MPVKit
       - package: SMBClient
         product: SMBClient
+      # UIWindow.avDisplayManager (Match Content) is an AVKit category: nothing else references an AVKit
+      # symbol since AVDisplayCriteria moved to AVFoundation, so without this AVKit is not linked at all.
+      - sdk: AVKit.framework
     settings:
       base:
         TARGETED_DEVICE_FAMILY: "3"

@@ -7,24 +7,29 @@ struct ArtworkImage: View {
     var placeholderIcon = "film"
 
     var body: some View {
-        ZStack {
-            LinearGradient(colors: [Color.white.opacity(0.08), Color.white.opacity(0.03)], startPoint: .top, endPoint: .bottom)
-            if let url = TMDbClient.imageURL(path, size: size) {
-                AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.2))) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image.resizable().scaledToFill()
-                    case .failure:
-                        placeholder
-                    default:
-                        Color.clear
+        // The gradient takes the offered size; the image only fills it (a 16:9 video frame in a portrait
+        // poster slot must not widen the card or spill over its neighbours).
+        LinearGradient(colors: [Color.white.opacity(0.08), Color.white.opacity(0.03)], startPoint: .top, endPoint: .bottom)
+            .overlay {
+                if let url = TMDbClient.imageURL(path, size: size) {
+                    AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.2))) { phase in
+                        switch phase {
+                        case let .success(image):
+                            image.resizable().scaledToFill()
+                        case .failure:
+                            placeholder
+                        default:
+                            Color.clear
+                        }
                     }
+                } else {
+                    placeholder
                 }
-            } else {
-                placeholder
             }
-        }
-        .clipped()
+            .clipped()
+            // Clipping only affects drawing: keep taps and the accessibility frame inside the slot too.
+            .contentShape(Rectangle())
+            .accessibilityHidden(true)
     }
 
     private var placeholder: some View {
@@ -56,7 +61,7 @@ struct PosterCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ArtworkImage(path: item.posterPath, size: "w342", placeholderIcon: item.kind == .show ? "tv" : "film")
+            ArtworkImage(path: item.posterPath, size: "w342", placeholderIcon: Self.icon(item.kind))
                 .aspectRatio(2 / 3, contentMode: .fill)
                 .frame(width: Theme.posterWidth, height: Theme.posterWidth * 1.5)
                 .overlay(alignment: .topTrailing) {
@@ -83,6 +88,31 @@ struct PosterCard: View {
             .frame(width: Theme.posterWidth, alignment: .leading)
             #endif
         }
+    }
+}
+
+extension PosterCard {
+    static func icon(_ kind: LibraryKind) -> String {
+        switch kind {
+        case .movie: return "film"
+        case .show: return "tv"
+        case .musicVideo: return "music.note.tv"
+        case .album: return "music.note"
+        }
+    }
+}
+
+/// Poster that opens the detail page, with progress / watched state.
+struct PosterLink: View {
+    let item: LibraryItem
+    let index: LibraryIndex
+
+    var body: some View {
+        let state = index.progress(of: item)
+        NavigationLink(value: item.kind == .album ? Route.album(itemKey: item.key) : Route.detail(itemKey: item.key)) {
+            PosterCard(item: item, progress: state.progress, watched: state.watched)
+        }
+        .tileButtonStyle()
     }
 }
 

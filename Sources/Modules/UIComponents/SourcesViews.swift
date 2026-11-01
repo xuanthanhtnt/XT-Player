@@ -30,6 +30,7 @@ struct BrowserView: View {
     @EnvironmentObject private var scanner: LibraryScanner
     @Query private var folders: [LibraryFolder]
     @State private var items: [RemoteItem] = []
+    @State private var resolvedServer: ServerCredentials?
     @State private var loading = true
     @State private var error: String?
 
@@ -37,11 +38,25 @@ struct BrowserView: View {
         List {
             if !path.isEmpty {
                 Section {
-                    Button(action: toggleLibrary) {
-                        Label(isLibraryFolder ? "Đã có trong thư viện — quét lại" : "Thêm thư mục này vào thư viện",
-                              systemImage: isLibraryFolder ? "arrow.triangle.2.circlepath" : "rectangle.stack.badge.plus")
+                    if isLibraryFolder {
+                        Button { addToLibrary(as: nil) } label: {
+                            Label("Đã có trong thư viện (\(LibraryFolderKind.of(folderKey).label)) — quét lại", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .disabled(scanner.isScanning)
+                    } else {
+                        // The folder's type decides how it is recognised: films via TMDb, music videos by file name,
+                        // music as albums of tracks.
+                        Menu {
+                            ForEach(LibraryFolderKind.allCases) { kind in
+                                Button { addToLibrary(as: kind) } label: { Label(kind.label, systemImage: kind.icon) }
+                            }
+                        } label: {
+                            Label("Thêm thư mục này vào thư viện (gợi ý: \(suggestedKind.label))", systemImage: "rectangle.stack.badge.plus")
+                        } primaryAction: {
+                            addToLibrary(as: suggestedKind)
+                        }
+                        .disabled(scanner.isScanning)
                     }
-                    .disabled(scanner.isScanning)
                     if scanner.isScanning || !scanner.status.isEmpty {
                         Text(scanner.lastError ?? scanner.status).font(.footnote).foregroundStyle(.secondary)
                     }
@@ -62,13 +77,37 @@ struct BrowserView: View {
                     Label(item.name, systemImage: path.isEmpty ? "externaldrive.fill" : "folder.fill")
                 }
             }
-            ForEach(videos) { item in
-                Button { playFile(item) } label: {
-                    HStack {
-                        Image(systemName: "play.rectangle.fill").foregroundStyle(Theme.leaf)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.name).lineLimit(2)
-                            Text(detail(item)).font(.caption).foregroundStyle(.secondary)
+            // Videos and music in their own sections; each plays as its own queue.
+            if !videos.isEmpty {
+                Section(music.isEmpty ? "" : "Video") {
+                    ForEach(videos) { item in
+                        Button { playFile(item, in: videos) } label: {
+                            HStack(spacing: 12) {
+                                if let resolvedServer {
+                                    BrowserThumbnail(server: resolvedServer, item: item)
+                                } else {
+                                    Image(systemName: "play.rectangle.fill").foregroundStyle(Theme.leaf)
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.name).lineLimit(2)
+                                    Text(detail(item)).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if !music.isEmpty {
+                Section(videos.isEmpty ? "" : "Nhạc") {
+                    ForEach(music) { item in
+                        Button { playFile(item, in: music) } label: {
+                            HStack(spacing: 12) {
+                                BrowserAudioIcon()
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(FilenameParser.track(item.name).title).lineLimit(2)
+                                    Text(audioDetail(item)).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
                         }
                     }
                 }
@@ -83,6 +122,9 @@ struct BrowserView: View {
     private var server: ServerCredentials? { PlaybackFactory.server(id: serverID, context: context) }
     private var directories: [RemoteItem] { items.filter(\.isDirectory).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending } }
     private var videos: [RemoteItem] { items.filter(\.isVideo).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending } }
+    private var music: [RemoteItem] { items.filter(\.isAudio).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending } }
+    private var folderKey: String { "\(serverID):\(path)" }
+    private var suggestedKind: LibraryFolderKind { LibraryFolderKind.guess(name: title, items: items) }
     private var subtitles: [RemoteItem] { items.filter(\.isSubtitle) }
     private var isLibraryFolder: Bool { folders.contains { $0.serverID == serverID && $0.path == path } }
 
@@ -100,6 +142,7 @@ struct BrowserView: View {
             return
         }
         if reconnect { RemoteFileSystemPool.shared.reset(serverID) }
+        resolvedServer = server
         loading = true
         error = nil
         do {
@@ -111,24 +154,33 @@ struct BrowserView: View {
         loading = false
     }
 
-    private func playFile(_ item: RemoteItem) {
+    /// "FLAC · 45 MB": format and size of a music file.
+    private func audioDetail(_ item: RemoteItem) -> String {
+        let format = item.fileExtension == "dsf" || item.fileExtension == "dff" ? "DSD" : item.fileExtension.uppercased()
+        return format + " · " + ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file)
+    }
+
+    private func playFile(_ item: RemoteItem, in files: [RemoteItem]) {
         guard let server else { return }
-        let queue = PlaybackFactory.remote(files: videos, subtitles: subtitles, server: server, context: context)
-        let index = videos.firstIndex(of: item) ?? 0
+        let queue = PlaybackFactory.remote(files: files, subtitles: subtitles, server: server, context: context)
+        let index = files.firstIndex(of: item) ?? 0
         guard !queue.isEmpty else { return }
+        // Music plays on in the music player while browsing; videos open full screen.
+        if item.isAudio { return MusicPlayer.shared.play(queue, startAt: index, context: context) }
         play(PlaybackSession(items: queue, startIndex: index))
     }
 
-    private func toggleLibrary() {
-        let key = "\(serverID):\(path)"
+    /// Adds this folder to the library as `kind` (nil = keep its type) and scans it.
+    private func addToLibrary(as kind: LibraryFolderKind?) {
         let folder: LibraryFolder
-        if let existing = folders.first(where: { $0.key == key }) {
+        if let existing = folders.first(where: { $0.key == folderKey }) {
             folder = existing
         } else {
             folder = LibraryFolder(serverID: serverID, path: path, name: title)
             context.insert(folder)
             try? context.save()
         }
+        if let kind { LibraryFolderKind.set(kind, for: folder.key) }
         Task { await scanner.scan(folder: folder, context: context) }
     }
 }
@@ -338,10 +390,20 @@ struct SourcesView: View {
                         }
                         ForEach(folders) { folder in
                             NavigationLink(value: Route.browser(serverID: folder.serverID, path: folder.path, title: folder.name)) {
-                                SourceCard(icon: "folder.fill", title: folder.name, subtitle: folderDetail(folder))
+                                SourceCard(icon: LibraryFolderKind.of(folder.key).icon, title: folder.name, subtitle: folderDetail(folder))
                             }
                             .tileButtonStyle()
                             .contextMenu {
+                                Menu {
+                                    ForEach(LibraryFolderKind.allCases) { kind in
+                                        Button {
+                                            LibraryFolderKind.set(kind, for: folder.key)
+                                            Task { await scanner.scan(folder: folder, context: context) }
+                                        } label: {
+                                            Label(kind.label, systemImage: LibraryFolderKind.of(folder.key) == kind ? "checkmark" : kind.icon)
+                                        }
+                                    }
+                                } label: { Label("Loại thư mục", systemImage: "square.grid.2x2") }
                                 Button {
                                     Task { await scanner.scan(folder: folder, context: context) }
                                 } label: { Label("Quét lại", systemImage: "arrow.clockwise") }
@@ -373,7 +435,7 @@ struct SourcesView: View {
 
     private func folderDetail(_ folder: LibraryFolder) -> String {
         let server = servers.first { $0.id == folder.serverID }?.name ?? "?"
-        var parts = [server, "\(folder.fileCount) tệp"]
+        var parts = [LibraryFolderKind.of(folder.key).label, server, "\(folder.fileCount) tệp"]
         if let last = folder.lastScan { parts.append("quét " + last.formatted(.relative(presentation: .named))) }
         return parts.joined(separator: " · ")
     }
@@ -384,6 +446,7 @@ struct SourcesView: View {
         let folderKey = folder.key
         let files = (try? context.fetch(FetchDescriptor<LibraryFile>(predicate: #Predicate { $0.folderKey == folderKey }))) ?? []
         files.forEach { context.delete($0) }
+        LibraryFolderKind.set(nil, for: folder.key)
         context.delete(folder)
         pruneOrphans(context: context)
         try? context.save()

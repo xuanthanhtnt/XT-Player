@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import Libmpv
+import VideoToolbox
 #if os(iOS) || os(tvOS)
 import UIKit
 #else
@@ -94,8 +95,23 @@ struct MediaTrack: Identifiable, Hashable {
     }
 
     static func prettyCodec(_ codec: String) -> String {
-        switch codec.lowercased() {
-        case "truehd", "mlp": return "TrueHD"
+        let lower = codec.lowercased()
+        if lower.hasPrefix("pcm_") { return "PCM" }
+        if lower.hasPrefix("dsd_") { return "DSD" }
+        switch lower {
+        case "truehd": return "TrueHD"
+        case "mlp": return "MLP"
+        case "dst": return "DSD (DST)"
+        case "wavpack": return "WavPack"
+        case "alac": return "ALAC"
+        case "ape": return "APE"
+        case "tta": return "TTA"
+        case "tak": return "TAK"
+        case "mpc7", "mpc8": return "Musepack"
+        case "vorbis": return "Vorbis"
+        case "mp3", "mp3float": return "MP3"
+        case "vvc": return "H.266"
+        case "vp9": return "VP9"
         case "dts": return "DTS"
         case "eac3": return "DD+"
         case "ac3": return "AC3"
@@ -130,6 +146,20 @@ struct AudioSignal: Equatable {
     var channels = 0
     var sampleRate = 0
     var outputChannels = 0
+    /// Rate mpv hands the audio output (after its own resampling, if any).
+    var outputSampleRate = 0
+    /// Rate the output device itself runs at (the system mixer resamples to it when it differs).
+    var deviceSampleRate = 0.0
+    /// Decoded sample format ("s32" for 24-bit FLAC / TrueHD / DTS-HD MA, "floatp" for lossy codecs).
+    var sampleFormat = ""
+
+    /// Above CD / DVD rate (88.2 kHz and up).
+    var isHighResolution: Bool { sampleRate > 48_000 }
+
+    /// Reaches the device at the file's own rate: no resampling by mpv or by the system mixer.
+    var isNativeRate: Bool {
+        sampleRate > 0 && outputSampleRate == sampleRate && (deviceSampleRate <= 0 || abs(deviceSampleRate - Double(sampleRate)) < 1)
+    }
 }
 
 struct PlayerOptions {
@@ -149,6 +179,17 @@ struct PlayerOptions {
     var subtitleScale = 1.0
     var subtitlePosition = 100
     var subtitleBackground = false
+    /// VideoToolbox decoding; mpv falls back to software by itself for codecs the chip cannot decode.
+    var hardwareDecoding = true
+    var pictureQuality = PictureQuality.platformDefault
+    /// Display-synchronised playback with frame blending: no 24p judder on a 60 Hz screen.
+    var motionSmoothing = false
+    /// macOS: switch the output device to the file's sample rate instead of letting the system mixer resample.
+    var matchSampleRate = false
+    var nightMode = false
+    var dialogBoost = false
+    /// Music: ReplayGain / R128 tags level albums and tracks to the same loudness.
+    var volumeLeveling = false
 
     static var standard: PlayerOptions {
         #if os(macOS)
@@ -174,7 +215,96 @@ struct PlayerOptions {
         let position = d.integer(forKey: AppSettings.subtitlePosition)
         if position > 0 { o.subtitlePosition = position }
         o.subtitleBackground = d.bool(forKey: AppSettings.subtitleBackground)
+        o.hardwareDecoding = d.object(forKey: AppSettings.hardwareDecoding) as? Bool ?? true
+        o.pictureQuality = PictureQuality(rawValue: d.string(forKey: AppSettings.pictureQuality) ?? "") ?? .platformDefault
+        o.motionSmoothing = d.bool(forKey: AppSettings.motionSmoothing)
+        o.matchSampleRate = d.bool(forKey: AppSettings.matchSampleRate)
+        o.nightMode = d.bool(forKey: AppSettings.nightMode)
+        o.dialogBoost = d.bool(forKey: AppSettings.dialogBoost)
+        o.volumeLeveling = d.bool(forKey: AppSettings.volumeLeveling)
         return o
+    }
+}
+
+/// How hard libplacebo works on the picture: scaling, debanding and HDR tone-mapping.
+enum PictureQuality: String, CaseIterable, Identifiable {
+    case balanced, high, max
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .balanced: return "Cân bằng"
+        case .high: return "Cao"
+        case .max: return "Tối đa"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .balanced: return "Nhẹ máy, tiết kiệm pin"
+        case .high: return "Phóng to EWA Lanczos, khử dải màu, tone-map HDR chi tiết"
+        case .max: return "Phóng to Lanczos 4 nhánh cho cả màu — cần GPU khoẻ"
+        }
+    }
+
+    /// Renderer options a preset may change; the rest keep libmpv's defaults.
+    static let keys = ["scale", "cscale", "deband", "hdr-peak-percentile", "hdr-contrast-recovery"]
+
+    /// mpv's built-in "high-quality" profile plus debanding (8-bit web and streaming encodes band in skies
+    /// and dark scenes); "max" also upsamples chroma with the EWA scaler.
+    var values: [String: String] {
+        switch self {
+        case .balanced:
+            return [:]
+        case .high:
+            return ["scale": "ewa_lanczossharp", "deband": "yes", "hdr-peak-percentile": "99.995", "hdr-contrast-recovery": "0.30"]
+        case .max:
+            return ["scale": "ewa_lanczos4sharpest", "cscale": "ewa_lanczossharp", "deband": "yes",
+                    "hdr-peak-percentile": "99.995", "hdr-contrast-recovery": "0.30"]
+        }
+    }
+
+    /// Apple silicon Macs have GPU to spare; iPhone, iPad and Apple TV keep the battery and the 4K frame rate.
+    static var platformDefault: PictureQuality {
+        #if os(macOS)
+        return .high
+        #else
+        return .balanced
+        #endif
+    }
+}
+
+/// Night mode and dialogue boost as an FFmpeg filter chain (filters enabled in XT-Player's FFmpeg build,
+/// see Packages/MPVKit). Night mode also turns on the AC-3 / E-AC-3 decoder's own DRC metadata.
+enum AudioEnhancement {
+    static func filter(night: Bool, dialog: Bool, source: Int, output: Int) -> String {
+        guard night || dialog, source > 0, output > 0 else { return "" }
+        var chain: [String] = []
+        if source <= 2 {
+            // Stereo has no centre channel: dialoguenhance pulls the voice band out of what both sides share.
+            if dialog, source == 2 { chain.append("dialoguenhance=original=1:enhance=1.5:voice=3") }
+        } else if output <= 2 {
+            // Speakers / headphones: a dialogue-first downmix instead of the standard -3 dB centre.
+            let centre = dialog ? 1.2 : 1.0, surround = dialog ? 0.35 : 0.5
+            chain.append(String(format: "aresample=out_chlayout=stereo:clev=%.2f:slev=%.2f:lfe_mix_level=0", centre, surround))
+        } else {
+            // Receiver / TV: keep the layout, lower everything around the centre channel.
+            let wide = source >= 8 && output >= 8
+            let side = dialog ? 0.6 : 0.75, front = dialog ? 0.7 : 1.0
+            var gains = [
+                String(format: "FL=%.2f*FL", front), String(format: "FR=%.2f*FR", front), "FC=FC",
+                String(format: "LFE=%.2f*LFE", night ? 0.5 : 0.7),
+                String(format: "BL=%.2f*BL", side), String(format: "BR=%.2f*BR", side),
+            ]
+            if wide { gains += [String(format: "SL=%.2f*SL", side), String(format: "SR=%.2f*SR", side)] }
+            let layout = wide ? "7.1" : "5.1"
+            chain.append("aresample=out_chlayout=\(layout)")
+            chain.append("pan=\(layout)|\(gains.joined(separator: "|"))")
+        }
+        // Night: raise quiet passages and hold back explosions, frame by frame (peaks capped at 0.6).
+        if night { chain.append("dynaudnorm=f=250:g=31:p=0.6:m=8") }
+        return chain.isEmpty ? "" : "lavfi=[\(chain.joined(separator: ","))]"
     }
 }
 
@@ -242,6 +372,14 @@ final class MPVPlayerEngine: ObservableObject {
     @Published private(set) var duration: Double = 0
     @Published private(set) var isBuffering = false
     @Published private(set) var bufferedSeconds: Double = 0
+    /// 0…100 while mpv refills the cache after an underrun.
+    @Published private(set) var bufferingProgress = 0
+    /// Bytes per second mpv reads from an HTTP(S) source (mpv `cache-speed`).
+    @Published private(set) var readSpeed: Double = 0
+    /// The current file comes through the app's xtsmb:// bridge (its traffic is in `StreamTrafficMeter`).
+    @Published private(set) var readsThroughBridge = false
+    /// What `load` was given (path or URL), for subtitle search by file hash.
+    private(set) var currentLocation = ""
     @Published private(set) var video = VideoSignal()
     @Published private(set) var audio = AudioSignal()
     @Published private(set) var hardwareDecoder = ""
@@ -250,6 +388,20 @@ final class MPVPlayerEngine: ObservableObject {
     @Published private(set) var subtitleTracks: [MediaTrack] = []
     @Published private(set) var subtitleDelay: Double = 0
     @Published private(set) var nightMode = false
+    @Published private(set) var dialogBoost = false
+    @Published private(set) var hardwareDecoding = true
+    @Published private(set) var pictureQuality = PictureQuality.platformDefault
+    /// What the renderer actually runs: `pictureQuality`, except "Cân bằng" for 4K on iPhone / iPad / Apple TV.
+    @Published private(set) var effectivePictureQuality = PictureQuality.platformDefault
+    @Published private(set) var motionSmoothing = false
+    /// ReplayGain levelling (music).
+    @Published private(set) var volumeLeveling = false
+    /// macOS: the output device follows the file's sample rate.
+    @Published private(set) var matchSampleRate = false
+    /// Frames dropped because decoding or rendering could not keep up (a hint to lower the picture quality).
+    @Published private(set) var droppedFrames = 0
+    /// Index of the playing entry of mpv's own playlist (music queue), -1 = none.
+    @Published private(set) var playlistPosition = -1
     @Published private(set) var hdrOutputActive = false
     @Published private(set) var chapters: [Chapter] = []
     @Published private(set) var currentChapter = -1
@@ -259,6 +411,13 @@ final class MPVPlayerEngine: ObservableObject {
     @Published private(set) var videoFit: VideoFit = .fit
     /// mpv audio output actually in use ("coreaudio", "audiounit", "avfoundation"), empty = none.
     @Published private(set) var audioOutput = ""
+
+    /// Bitstreaming to a receiver: the volume is the receiver's, not the app's or the system's.
+    var isBitstreaming: Bool { audioOutput == "coreaudio_exclusive" }
+
+    /// mpv bitstreams through libavformat's spdif muxer (enabled in XT-Player's FFmpeg build; upstream MPVKit
+    /// leaves it out, and ad_spdif then fails with "libavformat spdif initialization failed").
+    static let bitstreamSupported = true
     @Published private(set) var videoBitrate: Double = 0
     @Published private(set) var audioBitrate: Double = 0
     @Published private(set) var volume: Double = 100
@@ -267,6 +426,8 @@ final class MPVPlayerEngine: ObservableObject {
     @Published private(set) var audioDevice = "auto"
 
     let options: PlayerOptions
+    /// Music player: no video output; files play from mpv's playlist so tracks join without a gap.
+    let audioOnly: Bool
 
     private let queue = DispatchQueue(label: "xt.mpv.core", qos: .userInitiated)
     private var handle: OpaquePointer?          // queue only
@@ -274,9 +435,22 @@ final class MPVPlayerEngine: ObservableObject {
     private var isPaused = false                // queue only
     private var reachedEOF = false              // queue only
     private var pendingSubtitles: [String] = [] // queue only: sidecar subtitles for the file being loaded
+    private var rendererDefaults: [String: String] = [:] // queue only: libmpv's own values of PictureQuality.keys
+    private var requestedQuality = PictureQuality.platformDefault // queue only
+    private var appliedQuality: PictureQuality? // queue only: what the renderer runs, after the 4K cap
+    private var sourceHeight = 0 // queue only
+    private var wantsNightMode = false          // queue only
+    private var wantsDialogBoost = false        // queue only
+    private var sourceChannels = 0              // queue only
+    private var outputChannels = 0              // queue only
+    private var appliedAudioFilter = ""         // queue only
+    private var appliedAC3DRC = "0"             // queue only
+    private var decoderDrops = 0                // queue only
+    private var outputDrops = 0                 // queue only
 
     private var attached = false                // main only
     private var pendingLoad: (location: String, start: Double?, subtitles: [String])?
+    private var pendingPlaylist: (locations: [String], start: Int)?
     private var retainedLayer: MPVMetalLayer?
     private weak var hostView: MPVVideoView?
     private var notificationTokens: [NSObjectProtocol] = []
@@ -284,8 +458,41 @@ final class MPVPlayerEngine: ObservableObject {
     private let displayMatcher = DisplayModeMatcher()
     #endif
 
-    init(options: PlayerOptions = .fromSettings()) {
+    init(options: PlayerOptions = .fromSettings(), audioOnly: Bool = false) {
         self.options = options
+        self.audioOnly = audioOnly
+        nightMode = options.nightMode
+        dialogBoost = options.dialogBoost
+        hardwareDecoding = options.hardwareDecoding
+        pictureQuality = options.pictureQuality
+        motionSmoothing = options.motionSmoothing
+        volumeLeveling = options.volumeLeveling
+        matchSampleRate = options.matchSampleRate
+        // Settings changed while something plays apply to it right away (the setters below write the same keys,
+        // so their own writes come back as no-ops).
+        notificationTokens.append(NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.followSettings()
+        })
+    }
+
+    private func followSettings() {
+        let d = UserDefaults.standard
+        if d.bool(forKey: AppSettings.nightMode) != nightMode { setNightMode(!nightMode) }
+        if d.bool(forKey: AppSettings.dialogBoost) != dialogBoost { setDialogBoost(!dialogBoost) }
+        if d.bool(forKey: AppSettings.volumeLeveling) != volumeLeveling { setVolumeLeveling(!volumeLeveling) }
+        #if os(macOS)
+        if d.bool(forKey: AppSettings.matchSampleRate) != matchSampleRate { setMatchSampleRate(!matchSampleRate) }
+        #endif
+        guard !audioOnly else { return }
+        let hardware = d.object(forKey: AppSettings.hardwareDecoding) as? Bool ?? true
+        if hardware != hardwareDecoding { setHardwareDecoding(hardware) }
+        if let quality = PictureQuality(rawValue: d.string(forKey: AppSettings.pictureQuality) ?? ""), quality != pictureQuality {
+            setPictureQuality(quality)
+        }
+        #if !os(tvOS)
+        let motion = d.bool(forKey: AppSettings.motionSmoothing)
+        if motion != motionSmoothing { setMotionSmoothing(motion) }
+        #endif
     }
 
     deinit {
@@ -307,14 +514,29 @@ final class MPVPlayerEngine: ObservableObject {
         let wid = Int64(Int(bitPattern: Unmanaged.passUnretained(view.metalLayer).toOpaque()))
         let hdr = options.hdrPassthrough && Self.displaySupportsHDR(view)
         hdrOutputActive = hdr
+        let refreshRate = Self.displayRefreshRate(view)
         #if os(iOS) || os(tvOS)
         AudioSessionConfigurator.activateForMoviePlayback()
         #endif
-        queue.async { self.createCore(wid: wid, hdr: hdr) }
+        queue.async { self.createCore(wid: wid, hdr: hdr, refreshRate: refreshRate) }
         observeAppLifecycle()
         if let pending = pendingLoad {
             pendingLoad = nil
             load(pending.location, startAt: pending.start, externalSubtitles: pending.subtitles)
+        }
+    }
+
+    /// Music player: an mpv core without a video surface.
+    func attachAudioOnly() {
+        guard !attached else { return }
+        attached = true
+        #if os(iOS) || os(tvOS)
+        AudioSessionConfigurator.activateForMusic()
+        #endif
+        queue.async { self.createCore(wid: 0, hdr: false, refreshRate: 0) }
+        if let pending = pendingPlaylist {
+            pendingPlaylist = nil
+            loadPlaylist(pending.locations, start: pending.start)
         }
     }
 
@@ -353,12 +575,59 @@ final class MPVPlayerEngine: ObservableObject {
         position = 0
         duration = 0
         chapters = []
+        readsThroughBridge = location.hasPrefix("xtsmb:")
+        currentLocation = location
         queue.async {
             self.pendingSubtitles = externalSubtitles
             var args = ["loadfile", location, "replace", "-1"]
             if let start, start > 0 { args.append("start=\(Int(start))") }
             self.command(args)
         }
+    }
+
+    // MARK: Playlist (music queue)
+
+    /// Replaces mpv's playlist and starts at `start`; the next file is opened ahead of time (prefetch-playlist)
+    /// so it follows the current one without a gap.
+    func loadPlaylist(_ locations: [String], start: Int) {
+        guard attached else {
+            pendingPlaylist = (locations, start)
+            return
+        }
+        state = .loading
+        position = 0
+        duration = 0
+        currentLocation = locations.indices.contains(start) ? locations[start] : ""
+        queue.async {
+            self.command(["stop"])
+            // A core that is still starting up picks its first entry from playlist-start, not from the
+            // playlist-play-index below (the first album of a session would start at track 1).
+            self.command(["set", "playlist-start", "\(start)"])
+            for location in locations { self.command(["loadfile", location, "append"]) }
+            // A queue that ended (keep-open) or was paused stays paused otherwise.
+            self.command(["set", "pause", "no"])
+            self.command(["playlist-play-index", "\(start)"])
+        }
+    }
+
+    func playlistInsertNext(_ location: String) { queue.async { self.command(["loadfile", location, "insert-next"]) } }
+    func playlistAppend(_ location: String) { queue.async { self.command(["loadfile", location, "append"]) } }
+    func playlistRemove(_ index: Int) { queue.async { self.command(["playlist-remove", "\(index)"]) } }
+    /// Moves the entry at `from` so that it takes the place of the entry at `to` (mpv's playlist-move).
+    func playlistMove(_ from: Int, to: Int) { queue.async { self.command(["playlist-move", "\(from)", "\(to)"]) } }
+    func playlistPlay(_ index: Int) {
+        queue.async {
+            self.command(["set", "pause", "no"])
+            self.command(["playlist-play-index", "\(index)"])
+        }
+    }
+    func playlistNext() { queue.async { self.command(["playlist-next"]) } }
+    func playlistPrevious() { queue.async { self.command(["playlist-prev"]) } }
+
+    /// Repeat: the whole queue, one track, or off.
+    func setLoop(playlist: Bool, file: Bool) {
+        setProperty("loop-playlist", playlist ? "inf" : "no")
+        setProperty("loop-file", file ? "inf" : "no")
     }
 
     func togglePause() { queue.async { self.command(["cycle", "pause"]) } }
@@ -374,6 +643,11 @@ final class MPVPlayerEngine: ObservableObject {
     }
 
     func selectAudioTrack(_ id: Int) { setProperty("aid", "\(id)") }
+
+    /// Loads a subtitle file (e.g. downloaded from OpenSubtitles) and shows it.
+    func addSubtitle(_ path: String) {
+        queue.async { self.command(["sub-add", path, "select"]) }
+    }
 
     /// nil disables subtitles.
     func selectSubtitleTrack(_ id: Int?) { setProperty("sid", id.map { "\($0)" } ?? "no") }
@@ -419,6 +693,22 @@ final class MPVPlayerEngine: ObservableObject {
     func selectAudioDevice(_ name: String) {
         audioDevice = name
         setProperty("audio-device", name)
+        refreshDeviceRateSoon()
+    }
+
+    /// iPhone / iPad / Apple TV: ask the audio session for the file's sample rate. A USB or Lightning DAC (and
+    /// a receiver taking 44.1 kHz) then plays 44.1 / 88.2 / 96 / 192 kHz natively instead of everything being
+    /// resampled to 48 kHz; outputs with a fixed rate keep theirs. mpv's AudioUnit output already runs at the
+    /// file's rate and follows the hardware by itself. An ao-reload here (as before) arrived while a file was
+    /// still starting: the output was never reopened and the picture stayed on its first frame, which is how a
+    /// 48 kHz 4K film froze on Apple TV right after a 44.1 kHz one.
+    fileprivate func followSourceSampleRate(_ rate: Int) {
+        #if os(iOS) || os(tvOS)
+        guard rate > 0 else { return }
+        let session = AVAudioSession.sharedInstance()
+        guard abs(session.sampleRate - Double(rate)) >= 1 else { return }
+        try? session.setPreferredSampleRate(Double(rate))
+        #endif
     }
 
     func refreshAudioDevices() {
@@ -432,15 +722,154 @@ final class MPVPlayerEngine: ObservableObject {
         queue.async { self.command(["add", "chapter", "\(step)"]) }
     }
 
-    /// Night mode: dynamic range compression + loudness normalisation (FFmpeg dynaudnorm).
+    /// Night mode: the Dolby decoder's dynamic range compression, less LFE and surround.
     func setNightMode(_ enabled: Bool) {
         nightMode = enabled
-        setProperty("af", enabled ? "lavfi=[dynaudnorm=f=250:g=31:p=0.6:m=8]" : "")
+        UserDefaults.standard.set(enabled, forKey: AppSettings.nightMode)
+        queue.async {
+            self.wantsNightMode = enabled
+            if let mpv = self.handle { self.applyAudioEnhancements(mpv) }
+        }
+    }
+
+    /// Dialogue boost: centre channel (or the stereo mid) up against everything else.
+    func setDialogBoost(_ enabled: Bool) {
+        dialogBoost = enabled
+        UserDefaults.standard.set(enabled, forKey: AppSettings.dialogBoost)
+        queue.async {
+            self.wantsDialogBoost = enabled
+            if let mpv = self.handle { self.applyAudioEnhancements(mpv) }
+        }
+    }
+
+    /// ReplayGain / R128 album gain, applied to what is playing.
+    func setVolumeLeveling(_ enabled: Bool) {
+        volumeLeveling = enabled
+        UserDefaults.standard.set(enabled, forKey: AppSettings.volumeLeveling)
+        if enabled {
+            setProperty("replaygain-clip", "no")
+            setProperty("replaygain-fallback", "0")
+        }
+        setProperty("replaygain", enabled ? "album" : "no")
+    }
+
+    /// macOS: switch the output device to the file's rate (or stop doing so); the audio output reopens.
+    func setMatchSampleRate(_ enabled: Bool) {
+        matchSampleRate = enabled
+        UserDefaults.standard.set(enabled, forKey: AppSettings.matchSampleRate)
+        queue.async {
+            guard let mpv = self.handle else { return }
+            mpv_set_property_string(mpv, "coreaudio-change-physical-format", enabled ? "yes" : "no")
+            self.command(["ao-reload"])
+        }
+        refreshDeviceRateSoon()
+    }
+
+    /// The device's own rate can change without mpv's output format changing (another rate matched, another
+    /// device picked): read it again once the output has reopened.
+    private func refreshDeviceRateSoon() {
+        for delay in [0.6, 1.6] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else { return }
+                self.audio.deviceSampleRate = AudioHardware.sampleRate(device: self.audioDevice)
+            }
+        }
+    }
+
+    /// VideoToolbox on / off for the file that is playing (mpv re-creates the decoder) and the next ones.
+    func setHardwareDecoding(_ enabled: Bool) {
+        hardwareDecoding = enabled
+        UserDefaults.standard.set(enabled, forKey: AppSettings.hardwareDecoding)
+        setProperty("hwdec", enabled ? "videotoolbox" : "no")
+    }
+
+    func setPictureQuality(_ quality: PictureQuality) {
+        pictureQuality = quality
+        UserDefaults.standard.set(quality.rawValue, forKey: AppSettings.pictureQuality)
+        queue.async {
+            if let mpv = self.handle { self.applyPictureQuality(quality, mpv) }
+        }
+    }
+
+    func setMotionSmoothing(_ enabled: Bool) {
+        motionSmoothing = enabled
+        UserDefaults.standard.set(enabled, forKey: AppSettings.motionSmoothing)
+        queue.async {
+            guard let mpv = self.handle else { return }
+            for (name, value) in Self.motionOptions(enabled) { mpv_set_property_string(mpv, name, value) }
+        }
+    }
+
+    /// Display-resample times every frame to the screen's refresh and re-times audio by the tiny difference;
+    /// "oversample" blends only the frame that straddles a refresh, so motion is even without the soap-opera
+    /// look of motion interpolation.
+    private static func motionOptions(_ enabled: Bool) -> [(String, String)] {
+        enabled ? [("video-sync", "display-resample"), ("interpolation", "yes"), ("tscale", "oversample")]
+                : [("video-sync", "audio"), ("interpolation", "no")]
+    }
+
+    private func applyPictureQuality(_ quality: PictureQuality, _ mpv: OpaquePointer) {
+        requestedQuality = quality
+        let effective = Self.affordable(quality, height: sourceHeight)
+        guard effective != appliedQuality else { return }
+        appliedQuality = effective
+        publish { $0.effectivePictureQuality = effective }
+        let values = effective.values
+        for key in PictureQuality.keys {
+            // An empty cscale is libmpv's own default ("same as scale"): it has to be written back too, or
+            // leaving "Tối đa" kept its EWA chroma scaler.
+            guard let value = values[key] ?? rendererDefaults[key], !value.isEmpty || key == "cscale" else { continue }
+            let status = mpv_set_property_string(mpv, key, value)
+            if status < 0 {
+                MPVLogBuffer.shared.append("[xt] \(key)=\(value): \(String(cString: mpv_error_string(status)))")
+            }
+        }
+    }
+
+    /// iPhone, iPad and Apple TV GPUs cannot run the EWA scalers and debanding over a 4K frame in time: the
+    /// picture stalled and the UI froze with it. Above 1440p those presets fall back to libmpv's defaults.
+    private static func affordable(_ quality: PictureQuality, height: Int) -> PictureQuality {
+        #if os(iOS) || os(tvOS)
+        return height > 1440 ? .balanced : quality
+        #else
+        return quality
+        #endif
+    }
+
+    /// Rebuilds the audio filter chain for the current source / output layout. Must be called on `queue`.
+    private func applyAudioEnhancements(_ mpv: OpaquePointer) {
+        let drc = wantsNightMode ? "1" : "0"
+        if drc != appliedAC3DRC {
+            appliedAC3DRC = drc
+            mpv_set_property_string(mpv, "ad-lavc-ac3drc", drc)
+        }
+        let active = wantsNightMode || wantsDialogBoost
+        // While the layout is unknown (between files) the current chain stays; off always clears it.
+        guard !active || (sourceChannels > 0 && outputChannels > 0) else { return }
+        let filter = AudioEnhancement.filter(night: wantsNightMode, dialog: wantsDialogBoost, source: sourceChannels, output: outputChannels)
+        guard filter != appliedAudioFilter else { return }
+        appliedAudioFilter = filter
+        let status = mpv_set_property_string(mpv, "af", filter)
+        if status < 0 {
+            MPVLogBuffer.shared.append("[xt] af=\(filter): \(String(cString: mpv_error_string(status)))")
+        }
     }
 
     // MARK: - mpv core
 
-    private func createCore(wid: Int64, hdr: Bool) {
+    /// VP9 and AV1 decode in hardware only once the app registers Apple's supplemental decoders. FFmpeg does it
+    /// on macOS but not on iOS / tvOS, where 4K VP9 then fell back to the CPU: stutter, and a UI that froze.
+    private static let supplementalDecoders: Void = {
+        #if os(iOS) || os(tvOS)
+        if #available(iOS 26.2, tvOS 26.2, *) {
+            VTRegisterSupplementalVideoDecoderIfAvailable(kCMVideoCodecType_VP9)
+            VTRegisterSupplementalVideoDecoderIfAvailable(kCMVideoCodecType_AV1)
+        }
+        #endif
+    }()
+
+    private func createCore(wid: Int64, hdr: Bool, refreshRate: Double) {
+        _ = Self.supplementalDecoders
         guard let mpv = mpv_create() else {
             publish { $0.state = .failed("Không khởi tạo được libmpv") }
             return
@@ -448,15 +877,17 @@ final class MPVPlayerEngine: ObservableObject {
         // Info-level log lines (AO/VO selection, warnings, errors) are always kept for the Info panel.
         mpv_request_log_messages(mpv, "info")
 
-        var windowID = wid
-        mpv_set_option(mpv, "wid", MPV_FORMAT_INT64, &windowID)
+        if wid != 0 {
+            var windowID = wid
+            mpv_set_option(mpv, "wid", MPV_FORMAT_INT64, &windowID)
+        }
 
         var settings: [(String, String)] = [
             // Video: Vulkan → MoltenVK → Metal, VideoToolbox decode, libplacebo rendering.
             ("vo", "gpu-next"),
             ("gpu-api", "vulkan"),
             ("gpu-context", "moltenvk"),
-            ("hwdec", "videotoolbox"),
+            ("hwdec", options.hardwareDecoding ? "videotoolbox" : "no"),
             ("hwdec-codecs", "all"),
             ("video-rotate", "no"),
             ("target-colorspace-hint", hdr ? "yes" : "no"),
@@ -470,7 +901,13 @@ final class MPVPlayerEngine: ObservableObject {
             ("demuxer-max-bytes", "\(options.cacheMegabytes)MiB"),
             ("demuxer-max-back-bytes", "\(max(64, options.cacheMegabytes / 4))MiB"),
             ("demuxer-readahead-secs", "60"),
-            ("cache-pause-wait", "2"),
+            // After an underrun, refill several seconds before resuming instead of stuttering every 2 s;
+            // also buffer before the first frame so playback does not stall right after it starts.
+            ("cache-pause-wait", "4"),
+            ("cache-pause-initial", "yes"),
+            ("demuxer-seekable-cache", "yes"),
+            // WebDAV/HTTP: keep the connection across seeks and reconnect after a dropped connection.
+            ("stream-lavf-o", "reconnect=1,reconnect_on_network_error=1,reconnect_delay_max=5,multiple_requests=1"),
             ("network-timeout", "30"),
             ("user-agent", "XT-Player/0.1 (libmpv)"),
             // Subtitles: libass keeps .ass/.ssa styling & karaoke intact.
@@ -497,15 +934,45 @@ final class MPVPlayerEngine: ObservableObject {
             ("load-scripts", "no"),
             ("ytdl", "no"),
         ]
+        if audioOnly {
+            // Music: nothing to show (the app draws the cover), files decoded back to back from mpv's playlist.
+            settings = settings.filter { !["vo", "gpu-api", "gpu-context", "hwdec", "target-colorspace-hint"].contains($0.0) }
+            settings += [("vo", "null"), ("vid", "no"), ("gapless-audio", "yes"), ("prefetch-playlist", "yes")]
+            // A few minutes of even 24-bit / 192 kHz audio; the film-sized cache (1 GiB on the Mac) times the
+            // prefetched next track only grew the footprint for hours of background music.
+            settings = settings.filter { !["demuxer-max-bytes", "demuxer-max-back-bytes"].contains($0.0) }
+            settings += [("demuxer-max-bytes", "64MiB"), ("demuxer-max-back-bytes", "16MiB")]
+        }
+        if options.volumeLeveling {
+            // Album gain keeps the loudness differences inside an album; never push peaks into clipping.
+            settings += [("replaygain", "album"), ("replaygain-clip", "no"), ("replaygain-fallback", "0")]
+        }
         if !options.audioLanguages.isEmpty { settings.append(("alang", options.audioLanguages)) }
+        // When the output cannot run at the file's rate, resample with a longer filter than libswresample's
+        // default (32 taps, 2^12 phases): less aliasing and passband ripple for hi-res sources.
+        settings.append(("audio-resample-filter-size", "32"))
+        settings.append(("audio-resample-phase-shift", "12"))
+        // The embedded Metal surface gives mpv no refresh rate; display-resample needs it.
+        if refreshRate > 0 { settings.append(("display-fps-override", String(format: "%.3f", refreshRate))) }
+        if options.motionSmoothing { settings += Self.motionOptions(true) }
+        wantsNightMode = options.nightMode
+        wantsDialogBoost = options.dialogBoost
+        appliedAC3DRC = options.nightMode ? "1" : "0"
+        settings.append(("ad-lavc-ac3drc", appliedAC3DRC))
         #if os(macOS)
         // Fallback chain (trailing comma = then mpv's own auto-probe) so a failing output never means silence.
         settings.append(("ao", "coreaudio,avfoundation,"))
         // The system mixer's layout: stereo speakers get a proper downmix, multichannel devices get more.
         settings.append(("audio-channels", "auto-safe"))
-        if options.audioPassthrough {
+        if options.audioPassthrough, Self.bitstreamSupported {
+            // No audio-exclusive: mpv's CoreAudio output takes exclusive (hog) mode by itself only while it
+            // bitstreams, and outputs without a digital format (built-in speakers, headphones) fall back to
+            // decoded PCM on the shared mixer, so the system volume keeps working for everything else.
             settings.append(("audio-spdif", "ac3,eac3,dts,dts-hd,truehd"))
-            settings.append(("audio-exclusive", "yes"))
+        }
+        if options.matchSampleRate {
+            // Bit-perfect sample rate: 44.1 kHz music and 48 / 96 kHz films reach a DAC without resampling.
+            settings.append(("coreaudio-change-physical-format", "yes"))
         }
         #elseif os(tvOS)
         settings.append(("ao", "audiounit,avfoundation,"))
@@ -530,6 +997,9 @@ final class MPVPlayerEngine: ObservableObject {
 
         MPVStreamProtocols.register(on: mpv)
 
+        for key in PictureQuality.keys { rendererDefaults[key] = getString(mpv, key) ?? "" }
+        applyPictureQuality(options.pictureQuality, mpv)
+
         let observed: [(String, mpv_format)] = [
             ("time-pos", MPV_FORMAT_DOUBLE),
             ("duration", MPV_FORMAT_DOUBLE),
@@ -537,6 +1007,8 @@ final class MPVPlayerEngine: ObservableObject {
             ("paused-for-cache", MPV_FORMAT_FLAG),
             ("eof-reached", MPV_FORMAT_FLAG),
             ("demuxer-cache-duration", MPV_FORMAT_DOUBLE),
+            ("cache-buffering-state", MPV_FORMAT_INT64),
+            ("cache-speed", MPV_FORMAT_INT64),
             ("track-list/count", MPV_FORMAT_INT64),
             ("aid", MPV_FORMAT_STRING),
             ("sid", MPV_FORMAT_STRING),
@@ -554,9 +1026,15 @@ final class MPVPlayerEngine: ObservableObject {
             ("video-bitrate", MPV_FORMAT_DOUBLE),
             ("audio-bitrate", MPV_FORMAT_DOUBLE),
             ("audio-params/channel-count", MPV_FORMAT_INT64),
+            ("audio-out-params/channel-count", MPV_FORMAT_INT64),
+            ("audio-out-params/samplerate", MPV_FORMAT_INT64),
+            ("audio-params/format", MPV_FORMAT_STRING),
+            ("frame-drop-count", MPV_FORMAT_INT64),
+            ("vo-drop-frame-count", MPV_FORMAT_INT64),
             ("audio-params/samplerate", MPV_FORMAT_INT64),
             ("chapter-list/count", MPV_FORMAT_INT64),
             ("chapter", MPV_FORMAT_INT64),
+            ("playlist-pos", MPV_FORMAT_INT64),
             ("speed", MPV_FORMAT_DOUBLE),
             ("audio-delay", MPV_FORMAT_DOUBLE),
             ("sub-scale", MPV_FORMAT_DOUBLE),
@@ -673,6 +1151,12 @@ final class MPVPlayerEngine: ObservableObject {
         case "demuxer-cache-duration":
             let s = double()
             publish { $0.bufferedSeconds = s }
+        case "cache-buffering-state":
+            let v = int()
+            publish { $0.bufferingProgress = v }
+        case "cache-speed":
+            let v = Double(int())
+            publish { $0.readSpeed = v }
         case "track-list/count", "aid", "sid":
             refreshTracks(mpv)
         case "sub-delay":
@@ -681,7 +1165,10 @@ final class MPVPlayerEngine: ObservableObject {
         case "video-params/w":
             let v = int(); updateVideo { $0.width = v }
         case "video-params/h":
-            let v = int(); updateVideo { $0.height = v }
+            let v = int()
+            sourceHeight = v
+            applyPictureQuality(requestedQuality, mpv)
+            updateVideo { $0.height = v }
         case "video-params/dw":
             let v = int(); updateVideo { $0.displayWidth = v }
         case "video-params/dh":
@@ -699,7 +1186,10 @@ final class MPVPlayerEngine: ObservableObject {
             publish { $0.hardwareDecoder = v }
         case "current-ao":
             let v = string()
-            publish { $0.audioOutput = v }
+            publish {
+                $0.audioOutput = v
+                $0.refreshDeviceRateSoon()
+            }
         case "video-bitrate":
             let v = double()
             publish { $0.videoBitrate = v }
@@ -707,13 +1197,37 @@ final class MPVPlayerEngine: ObservableObject {
             let v = double()
             publish { $0.audioBitrate = v }
         case "audio-params/channel-count":
-            let v = int()
+            sourceChannels = int()
+            applyAudioEnhancements(mpv)
+        case "audio-out-params/channel-count":
+            outputChannels = int()
+            let v = outputChannels
             publish { $0.audio.outputChannels = v }
+            applyAudioEnhancements(mpv)
+        case "frame-drop-count", "vo-drop-frame-count":
+            if name == "frame-drop-count" { decoderDrops = int() } else { outputDrops = int() }
+            let v = decoderDrops + outputDrops
+            publish { $0.droppedFrames = v }
         case "audio-params/samplerate":
             let v = int()
-            publish { $0.audio.sampleRate = v }
+            publish {
+                $0.audio.sampleRate = v
+                $0.followSourceSampleRate(v)
+            }
+        case "audio-out-params/samplerate":
+            let v = int()
+            publish {
+                $0.audio.outputSampleRate = v
+                $0.audio.deviceSampleRate = AudioHardware.sampleRate(device: $0.audioDevice)
+            }
+        case "audio-params/format":
+            let v = string()
+            publish { $0.audio.sampleFormat = v }
         case "chapter-list/count":
             refreshChapters(mpv)
+        case "playlist-pos":
+            let v = available ? int() : -1
+            publish { $0.playlistPosition = v }
         case "chapter":
             let v = available ? int() : -1
             publish { $0.currentChapter = v }
@@ -798,17 +1312,31 @@ final class MPVPlayerEngine: ObservableObject {
     /// If the file has audio but no output opened (device busy, unsupported layout…), switch to the
     /// AVFoundation output and reload instead of playing silently. Runs on `queue`.
     private var audioRecoveryTried = false
+    private var audioCheckGeneration = 0 // queue only: a newer file stops the previous file's checks
 
     private func scheduleAudioCheck() {
         audioRecoveryTried = false
-        queue.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.checkAudioOutput() }
+        audioCheckGeneration += 1
+        let generation = audioCheckGeneration
+        queue.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.checkAudioOutput(generation, since: nil) }
     }
 
-    private func checkAudioOutput() {
-        guard let mpv = handle, !audioRecoveryTried else { return }
+    /// No output is also what an output being reopened looks like (ao-reload after the session follows a new
+    /// sample rate, 44.1 → 48 kHz between two files) until audio flows again, and a 4K file still filling its
+    /// cache can take many seconds. Taking that for a failure switched Apple TV to the avfoundation output and
+    /// playback stopped for good: only a film that keeps playing for a while without an output counts.
+    private func checkAudioOutput(_ generation: Int, since startPosition: Double?) {
+        guard let mpv = handle, !audioRecoveryTried, generation == audioCheckGeneration else { return }
         let hasAudio = (0..<max(0, getInt(mpv, "track-list/count"))).contains { getString(mpv, "track-list/\($0)/type") == "audio" }
         let aid = getString(mpv, "aid") ?? "no"
         guard hasAudio, aid != "no", (getString(mpv, "current-ao") ?? "").isEmpty else { return }
+        var position = 0.0
+        mpv_get_property(mpv, "time-pos", MPV_FORMAT_DOUBLE, &position)
+        let playing = !getFlag(mpv, "pause") && !getFlag(mpv, "paused-for-cache")
+        guard let startPosition, playing, position - startPosition >= 1.5 else {
+            queue.asyncAfter(deadline: .now() + 2) { [weak self] in self?.checkAudioOutput(generation, since: position) }
+            return
+        }
         audioRecoveryTried = true
         MPVLogBuffer.shared.append("[xt] no audio output opened — retrying with avfoundation")
         mpv_set_property_string(mpv, "ao", "avfoundation,coreaudio,audiounit,")
@@ -891,6 +1419,18 @@ final class MPVPlayerEngine: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    /// Refresh rate of the screen showing the video (iPhone and iPad run Metal layers at 60 Hz unless the
+    /// app opts into ProMotion). Apple TV switches modes per film, so it is left to mpv there.
+    private static func displayRefreshRate(_ view: MPVVideoView) -> Double {
+        #if os(macOS)
+        return Double((view.window?.screen ?? NSScreen.main)?.maximumFramesPerSecond ?? 0)
+        #elseif os(iOS)
+        return Double(min(60, UIScreen.main.maximumFramesPerSecond))
+        #else
+        return 0
+        #endif
+    }
 
     private static func displaySupportsHDR(_ view: MPVVideoView) -> Bool {
         #if os(iOS) || os(tvOS)
