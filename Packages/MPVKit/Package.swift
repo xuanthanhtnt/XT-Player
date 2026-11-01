@@ -1,6 +1,7 @@
 // swift-tools-version:5.9
 // XT-Player: MPVKit 1.1.0-n9.0.2 with FFmpeg rebuilt by ffmpeg-build.patch (DSD, WavPack, MLP, raw DTS / TrueHD,
-// S/PDIF bitstreaming, VVC, loudness and dialogue filters). Regenerate with tools/make_package.py.
+// S/PDIF bitstreaming, VVC, loudness and dialogue filters) and libmpv 0.41 rebuilt with mpv-build.patch
+// (CoreAudio hotplug fix). Regenerate with tools/make_package.py.
 
 import PackageDescription
 
@@ -169,37 +170,37 @@ let package = Package(
 
         .binaryTarget(
             name: "Libavcodec",
-            url: "https://github.com/xuanthanhtnt/XT-Player/releases/download/deps-ffmpeg-n9.0.2-xt1/Libavcodec.xcframework.zip",
+            url: "https://github.com/xuanthanhtnt/XT-Player/releases/download/deps-mpvkit-xt2/Libavcodec.xcframework.zip",
             checksum: "b579e85ce1ef2e8c0dc7f11ebb1881c5859098347d9aa1a9e8cee6bca1c7c7d7"
         ),
         .binaryTarget(
             name: "Libavdevice",
-            url: "https://github.com/xuanthanhtnt/XT-Player/releases/download/deps-ffmpeg-n9.0.2-xt1/Libavdevice.xcframework.zip",
+            url: "https://github.com/xuanthanhtnt/XT-Player/releases/download/deps-mpvkit-xt2/Libavdevice.xcframework.zip",
             checksum: "896ed0344cda77953668b9d86c165c080609f50f4e9f5b214e027c40d3f9690f"
         ),
         .binaryTarget(
             name: "Libavformat",
-            url: "https://github.com/xuanthanhtnt/XT-Player/releases/download/deps-ffmpeg-n9.0.2-xt1/Libavformat.xcframework.zip",
+            url: "https://github.com/xuanthanhtnt/XT-Player/releases/download/deps-mpvkit-xt2/Libavformat.xcframework.zip",
             checksum: "909e6f0e66b48c011fe1ae6bf260da17f31271183f660f469199e0d517c21774"
         ),
         .binaryTarget(
             name: "Libavfilter",
-            url: "https://github.com/xuanthanhtnt/XT-Player/releases/download/deps-ffmpeg-n9.0.2-xt1/Libavfilter.xcframework.zip",
+            url: "https://github.com/xuanthanhtnt/XT-Player/releases/download/deps-mpvkit-xt2/Libavfilter.xcframework.zip",
             checksum: "afafb1a482d7bc4158ee22406e6b4b9fdbdfe9d50a89b03d7ba81f1c05218edf"
         ),
         .binaryTarget(
             name: "Libavutil",
-            url: "https://github.com/xuanthanhtnt/XT-Player/releases/download/deps-ffmpeg-n9.0.2-xt1/Libavutil.xcframework.zip",
+            url: "https://github.com/xuanthanhtnt/XT-Player/releases/download/deps-mpvkit-xt2/Libavutil.xcframework.zip",
             checksum: "2683b63abee10636f626102e026059e97a261d7fdc3351fe466bdcc2ff20dc0c"
         ),
         .binaryTarget(
             name: "Libswresample",
-            url: "https://github.com/xuanthanhtnt/XT-Player/releases/download/deps-ffmpeg-n9.0.2-xt1/Libswresample.xcframework.zip",
+            url: "https://github.com/xuanthanhtnt/XT-Player/releases/download/deps-mpvkit-xt2/Libswresample.xcframework.zip",
             checksum: "bd1d7f54b9bdcb1200673d4190738f0108f6b56995cc6d75d7b6d541b0dadaca"
         ),
         .binaryTarget(
             name: "Libswscale",
-            url: "https://github.com/xuanthanhtnt/XT-Player/releases/download/deps-ffmpeg-n9.0.2-xt1/Libswscale.xcframework.zip",
+            url: "https://github.com/xuanthanhtnt/XT-Player/releases/download/deps-mpvkit-xt2/Libswscale.xcframework.zip",
             checksum: "2366a5f23d957bb836e7e9246ec33f76f5c9c8614ef7dcb405f3b45eec9c9268"
         ),
 
@@ -217,8 +218,8 @@ let package = Package(
 
         .binaryTarget(
             name: "Libmpv",
-            url: "https://github.com/mpvkit/MPVKit/releases/download/1.1.0-n9.0.2/Libmpv.xcframework.zip",
-            checksum: "1d8651bebfe467bd5408751647de692cdacb1d19ba825e11785d770bc88c3225"
+            url: "https://github.com/xuanthanhtnt/XT-Player/releases/download/deps-mpvkit-xt2/Libmpv.xcframework.zip",
+            checksum: "7e94ab1050d6309d74ed8f8db7aade1c0bbf51dd63b262a87b69035e38b3791d"
         ),
         //AUTO_GENERATE_TARGETS_END//
     ]

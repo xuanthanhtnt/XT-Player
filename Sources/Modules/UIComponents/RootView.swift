@@ -11,6 +11,7 @@ enum Route: Hashable {
     case browser(serverID: String, path: String, title: String)
     case addServer
     case settings
+    case diagnostics
 }
 
 /// Top-level sections (sidebar on Mac / iPad / Apple TV, tab bar on iPhone).
@@ -296,6 +297,12 @@ struct RootView: View {
             Tab("Nhạc", systemImage: "music.note", value: AppSection.music) {
                 NavigationStack { MusicLibraryView().libraryRoutes() }.musicBar()
             }
+            #if os(tvOS)
+            // The Apple TV sidebar lists it like the Mac's (on iPhone it stays a page of Nhạc: the tab bar is full).
+            Tab("Video ca nhạc", systemImage: "music.note.tv.fill", value: AppSection.musicVideos) {
+                NavigationStack { MusicVideosView().libraryRoutes() }
+            }
+            #endif
             Tab("Nguồn", systemImage: "externaldrive.connected.to.line.below.fill", value: AppSection.sources) {
                 NavigationStack { SourcesView().libraryRoutes() }.musicBar()
             }
@@ -308,6 +315,7 @@ struct RootView: View {
     #endif
 
     /// Opened from a file picker or a URL: music plays in the music player, anything else full screen.
+
     private func open(_ item: PlaybackItem) {
         if FilenameParser.audioExtensions.contains((item.source.displayName as NSString).pathExtension.lowercased()) {
             music.play([item], context: context)
@@ -379,6 +387,8 @@ private struct LibraryRoutes: ViewModifier {
                 AddServerView()
             case .settings:
                 SettingsView()
+            case .diagnostics:
+                DiagnosticsLogView()
             }
         }
     }

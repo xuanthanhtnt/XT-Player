@@ -57,9 +57,14 @@ final class BrowserThumbnails: ObservableObject {
             if job.server.kind == .smb { RemoteCredentialStore.shared.register(job.server) }
             Task {
                 let location = job.location
-                let probe = await Task.detached(priority: .utility) { FrameGrabber.grab(location, to: output, timeout: 30) }.value
+                let result = await Task.detached(priority: .utility) { FrameGrabber.grab(location, to: output, timeout: 30) }.value
                 running.remove(job.key)
-                if probe != nil { ready.insert(job.key) } else { failed.insert(job.key) }
+                switch result {
+                case .success: ready.insert(job.key)
+                case .failure(.noPicture): failed.insert(job.key)
+                // Not read this time (NAS asleep, network not back after a wake): the row asks again when it reappears.
+                case .failure(.unavailable): break
+                }
                 pump()
             }
         }

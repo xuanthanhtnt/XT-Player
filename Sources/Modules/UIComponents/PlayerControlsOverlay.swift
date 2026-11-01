@@ -51,6 +51,12 @@ struct PlayerControlsOverlay: View {
     #endif
     @ObservedObject var thumbnails: ScrubThumbnailer
 
+    #if os(tvOS)
+    /// The controls are rebuilt each time they appear and the hidden remote catcher has just been disabled, so
+    /// nothing holds focus: without this the remote moved nowhere after the bar came back.
+    @FocusState private var playPauseFocused: Bool
+    #endif
+
     /// Time shown while dragging the scrubber, and until the seek lands.
     @State private var scrubPosition: Double?
     @State private var isScrubbing = false
@@ -63,6 +69,10 @@ struct PlayerControlsOverlay: View {
                 // Drop the scrub preview once playback has caught up with the seek.
                 if !isScrubbing, let target = scrubPosition, abs(position - target) < 1.5 { scrubPosition = nil }
             }
+        #elseif os(tvOS)
+        touchBody
+            .defaultFocus($playPauseFocused, true)
+            .onAppear { DispatchQueue.main.async { playPauseFocused = true } }
         #else
         touchBody
         #endif
@@ -447,6 +457,7 @@ struct PlayerControlsOverlay: View {
                     if hasPrevious { tvButton("backward.end.fill") { onPrevious() } }
                     tvButton(Self.skipIcon("gobackward", skipBack)) { engine.seek(by: -skipBack) }
                     tvButton(playPauseIcon) { togglePlayback() }
+                        .focused($playPauseFocused)
                     tvButton(Self.skipIcon("goforward", skipForward)) { engine.seek(by: skipForward) }
                     if hasNext { tvButton("forward.end.fill") { onNext() } }
                     #else
@@ -458,6 +469,9 @@ struct PlayerControlsOverlay: View {
                     #endif
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                #if os(tvOS)
+                .focusSection()
+                #endif
 
                 HStack(spacing: 8) {
                     if !engine.chapters.isEmpty { panelButton(.chapters, icon: "list.bullet.rectangle") }
@@ -467,6 +481,9 @@ struct PlayerControlsOverlay: View {
                     panelButton(.info, icon: "info.circle")
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
+                #if os(tvOS)
+                .focusSection()
+                #endif
             }
         }
         .padding(.horizontal, Self.panelPadding)
@@ -511,7 +528,10 @@ struct PlayerControlsOverlay: View {
         } label: {
             Label(target.title, systemImage: icon)
                 .font(.callout.weight(.semibold))
-                #if !os(tvOS)
+                #if os(tvOS)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                #else
                 .labelStyle(.iconOnly)
                 .foregroundStyle(panel == target ? Theme.leaf : .white)
                 .frame(width: 36, height: 36)
@@ -589,6 +609,14 @@ struct PlayerControlsOverlay: View {
 
     private func panelCard(_ current: PlayerPanel) -> some View {
         VStack(alignment: .leading, spacing: 0) {
+            #if os(tvOS)
+            // The same four buttons sit right under the bar on Apple TV: the panel only needs its name.
+            Text(current.title)
+                .font(.title3.weight(.bold))
+                .padding(.horizontal, 28)
+                .padding(.top, 24)
+                .padding(.bottom, 8)
+            #else
             HStack(spacing: 8) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 4) {
@@ -633,6 +661,7 @@ struct PlayerControlsOverlay: View {
             .padding(.horizontal, 14)
             .padding(.top, 14)
             .padding(.bottom, 8)
+            #endif
 
             ScrollView {
                 Group {
@@ -650,6 +679,8 @@ struct PlayerControlsOverlay: View {
         .frame(maxHeight: .infinity)
         #if os(tvOS)
         .background(Color.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        // Up from the buttons under the bar lands in the panel, wherever its rows sit.
+        .focusSection()
         #else
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(0.07)))
@@ -1274,6 +1305,23 @@ struct ChaptersPanel: View {
 }
 
 /// Technical details of what is playing, and the tail of the libmpv log (copyable for bug reports).
+#if os(tvOS)
+/// tvOS scrolls only by moving focus, so read-only rows take focus (with a light highlight); otherwise the Info
+/// panel could not be read past what fits on screen.
+private struct FocusableRow: ViewModifier {
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(focused ? Color.white.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .focusable()
+            .focused($focused)
+    }
+}
+#endif
+
 struct InfoPanel: View {
     @ObservedObject var engine: MPVPlayerEngine
     @State private var logLines: [String] = []
@@ -1297,7 +1345,7 @@ struct InfoPanel: View {
                     row("Màu", [engine.video.primaries, engine.video.gamma, engine.video.colorMatrix].filter { !$0.isEmpty }.joined(separator: " / "))
                 }
                 row("Giải mã", Self.decoderText(engine))
-                row("Xử lý hình", engine.pictureQuality.label + (engine.motionSmoothing ? " · chuyển động mượt" : ""))
+                row("Xử lý hình", Self.pictureText(engine) + (engine.motionSmoothing ? " · chuyển động mượt" : ""))
                 if engine.droppedFrames > 0 { row("Khung bị rớt", "\(engine.droppedFrames)", warning: engine.droppedFrames > 30) }
                 if engine.videoBitrate > 0 { row("Bitrate", Self.bitrate(engine.videoBitrate)) }
             }
@@ -1324,6 +1372,9 @@ struct InfoPanel: View {
             }
             section("Nhật ký libmpv") {
                 LogLines(lines: Array(logLines.suffix(60)))
+                    #if os(tvOS)
+                    .modifier(FocusableRow())
+                    #endif
                 LogActions(lines: logLines, onRefresh: refresh)
             }
         }
@@ -1367,7 +1418,16 @@ struct InfoPanel: View {
                     .foregroundStyle(warning ? Theme.danger : .white)
             }
             .font(.callout)
+            #if os(tvOS)
+            .modifier(FocusableRow())
+            #endif
         }
+    }
+
+    /// The preset the renderer runs, and the chosen one when the 4K cap stepped in.
+    static func pictureText(_ engine: MPVPlayerEngine) -> String {
+        let effective = engine.effectivePictureQuality, chosen = engine.pictureQuality
+        return effective == chosen ? chosen.label : "\(effective.label) · \(chosen.label) quá nặng với 4K"
     }
 
     /// Hardware decoder in use; software only once frames are being decoded (before that mpv reports none).

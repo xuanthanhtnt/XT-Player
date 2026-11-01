@@ -138,9 +138,7 @@ struct SettingsView: View {
                             #endif
                     }
                 }
-                NavigationLink {
-                    DiagnosticsLogView()
-                } label: {
+                NavigationLink(value: Route.diagnostics) {
                     Label("Nhật ký trình phát (chẩn đoán)", systemImage: "stethoscope")
                 }
             } header: {
@@ -177,6 +175,10 @@ struct SettingsView: View {
         }
         #if os(macOS)
         .formStyle(.grouped)
+        #elseif os(tvOS)
+        // tvOS opens a Form picker as a pushed list, and in the sidebar tab view that list came up empty (only
+        // the blurred background, nothing focusable): a menu opens in place instead.
+        .pickerStyle(.menu)
         #endif
         .pageTitle("Cài đặt")
         .onAppear {

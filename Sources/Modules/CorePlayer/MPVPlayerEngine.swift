@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import Libmpv
+import VideoToolbox
 #if os(iOS) || os(tvOS)
 import UIKit
 #else
@@ -390,6 +391,8 @@ final class MPVPlayerEngine: ObservableObject {
     @Published private(set) var dialogBoost = false
     @Published private(set) var hardwareDecoding = true
     @Published private(set) var pictureQuality = PictureQuality.platformDefault
+    /// What the renderer actually runs: `pictureQuality`, except "Cân bằng" for 4K on iPhone / iPad / Apple TV.
+    @Published private(set) var effectivePictureQuality = PictureQuality.platformDefault
     @Published private(set) var motionSmoothing = false
     /// ReplayGain levelling (music).
     @Published private(set) var volumeLeveling = false
@@ -433,6 +436,9 @@ final class MPVPlayerEngine: ObservableObject {
     private var reachedEOF = false              // queue only
     private var pendingSubtitles: [String] = [] // queue only: sidecar subtitles for the file being loaded
     private var rendererDefaults: [String: String] = [:] // queue only: libmpv's own values of PictureQuality.keys
+    private var requestedQuality = PictureQuality.platformDefault // queue only
+    private var appliedQuality: PictureQuality? // queue only: what the renderer runs, after the 4K cap
+    private var sourceHeight = 0 // queue only
     private var wantsNightMode = false          // queue only
     private var wantsDialogBoost = false        // queue only
     private var sourceChannels = 0              // queue only
@@ -692,16 +698,16 @@ final class MPVPlayerEngine: ObservableObject {
 
     /// iPhone / iPad / Apple TV: ask the audio session for the file's sample rate. A USB or Lightning DAC (and
     /// a receiver taking 44.1 kHz) then plays 44.1 / 88.2 / 96 / 192 kHz natively instead of everything being
-    /// resampled to 48 kHz; outputs with a fixed rate keep theirs. mpv reopens its output at the new rate.
+    /// resampled to 48 kHz; outputs with a fixed rate keep theirs. mpv's AudioUnit output already runs at the
+    /// file's rate and follows the hardware by itself. An ao-reload here (as before) arrived while a file was
+    /// still starting: the output was never reopened and the picture stayed on its first frame, which is how a
+    /// 48 kHz 4K film froze on Apple TV right after a 44.1 kHz one.
     fileprivate func followSourceSampleRate(_ rate: Int) {
         #if os(iOS) || os(tvOS)
         guard rate > 0 else { return }
         let session = AVAudioSession.sharedInstance()
         guard abs(session.sampleRate - Double(rate)) >= 1 else { return }
         try? session.setPreferredSampleRate(Double(rate))
-        if abs(session.sampleRate - Double(rate)) < 1 {
-            queue.async { self.command(["ao-reload"]) }
-        }
         #endif
     }
 
@@ -803,14 +809,31 @@ final class MPVPlayerEngine: ObservableObject {
     }
 
     private func applyPictureQuality(_ quality: PictureQuality, _ mpv: OpaquePointer) {
-        let values = quality.values
+        requestedQuality = quality
+        let effective = Self.affordable(quality, height: sourceHeight)
+        guard effective != appliedQuality else { return }
+        appliedQuality = effective
+        publish { $0.effectivePictureQuality = effective }
+        let values = effective.values
         for key in PictureQuality.keys {
-            guard let value = values[key] ?? rendererDefaults[key], !value.isEmpty else { continue }
+            // An empty cscale is libmpv's own default ("same as scale"): it has to be written back too, or
+            // leaving "Tối đa" kept its EWA chroma scaler.
+            guard let value = values[key] ?? rendererDefaults[key], !value.isEmpty || key == "cscale" else { continue }
             let status = mpv_set_property_string(mpv, key, value)
             if status < 0 {
                 MPVLogBuffer.shared.append("[xt] \(key)=\(value): \(String(cString: mpv_error_string(status)))")
             }
         }
+    }
+
+    /// iPhone, iPad and Apple TV GPUs cannot run the EWA scalers and debanding over a 4K frame in time: the
+    /// picture stalled and the UI froze with it. Above 1440p those presets fall back to libmpv's defaults.
+    private static func affordable(_ quality: PictureQuality, height: Int) -> PictureQuality {
+        #if os(iOS) || os(tvOS)
+        return height > 1440 ? .balanced : quality
+        #else
+        return quality
+        #endif
     }
 
     /// Rebuilds the audio filter chain for the current source / output layout. Must be called on `queue`.
@@ -834,7 +857,19 @@ final class MPVPlayerEngine: ObservableObject {
 
     // MARK: - mpv core
 
+    /// VP9 and AV1 decode in hardware only once the app registers Apple's supplemental decoders. FFmpeg does it
+    /// on macOS but not on iOS / tvOS, where 4K VP9 then fell back to the CPU: stutter, and a UI that froze.
+    private static let supplementalDecoders: Void = {
+        #if os(iOS) || os(tvOS)
+        if #available(iOS 26.2, tvOS 26.2, *) {
+            VTRegisterSupplementalVideoDecoderIfAvailable(kCMVideoCodecType_VP9)
+            VTRegisterSupplementalVideoDecoderIfAvailable(kCMVideoCodecType_AV1)
+        }
+        #endif
+    }()
+
     private func createCore(wid: Int64, hdr: Bool, refreshRate: Double) {
+        _ = Self.supplementalDecoders
         guard let mpv = mpv_create() else {
             publish { $0.state = .failed("Không khởi tạo được libmpv") }
             return
@@ -903,6 +938,10 @@ final class MPVPlayerEngine: ObservableObject {
             // Music: nothing to show (the app draws the cover), files decoded back to back from mpv's playlist.
             settings = settings.filter { !["vo", "gpu-api", "gpu-context", "hwdec", "target-colorspace-hint"].contains($0.0) }
             settings += [("vo", "null"), ("vid", "no"), ("gapless-audio", "yes"), ("prefetch-playlist", "yes")]
+            // A few minutes of even 24-bit / 192 kHz audio; the film-sized cache (1 GiB on the Mac) times the
+            // prefetched next track only grew the footprint for hours of background music.
+            settings = settings.filter { !["demuxer-max-bytes", "demuxer-max-back-bytes"].contains($0.0) }
+            settings += [("demuxer-max-bytes", "64MiB"), ("demuxer-max-back-bytes", "16MiB")]
         }
         if options.volumeLeveling {
             // Album gain keeps the loudness differences inside an album; never push peaks into clipping.
@@ -1126,7 +1165,10 @@ final class MPVPlayerEngine: ObservableObject {
         case "video-params/w":
             let v = int(); updateVideo { $0.width = v }
         case "video-params/h":
-            let v = int(); updateVideo { $0.height = v }
+            let v = int()
+            sourceHeight = v
+            applyPictureQuality(requestedQuality, mpv)
+            updateVideo { $0.height = v }
         case "video-params/dw":
             let v = int(); updateVideo { $0.displayWidth = v }
         case "video-params/dh":
@@ -1270,17 +1312,31 @@ final class MPVPlayerEngine: ObservableObject {
     /// If the file has audio but no output opened (device busy, unsupported layout…), switch to the
     /// AVFoundation output and reload instead of playing silently. Runs on `queue`.
     private var audioRecoveryTried = false
+    private var audioCheckGeneration = 0 // queue only: a newer file stops the previous file's checks
 
     private func scheduleAudioCheck() {
         audioRecoveryTried = false
-        queue.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.checkAudioOutput() }
+        audioCheckGeneration += 1
+        let generation = audioCheckGeneration
+        queue.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.checkAudioOutput(generation, since: nil) }
     }
 
-    private func checkAudioOutput() {
-        guard let mpv = handle, !audioRecoveryTried else { return }
+    /// No output is also what an output being reopened looks like (ao-reload after the session follows a new
+    /// sample rate, 44.1 → 48 kHz between two files) until audio flows again, and a 4K file still filling its
+    /// cache can take many seconds. Taking that for a failure switched Apple TV to the avfoundation output and
+    /// playback stopped for good: only a film that keeps playing for a while without an output counts.
+    private func checkAudioOutput(_ generation: Int, since startPosition: Double?) {
+        guard let mpv = handle, !audioRecoveryTried, generation == audioCheckGeneration else { return }
         let hasAudio = (0..<max(0, getInt(mpv, "track-list/count"))).contains { getString(mpv, "track-list/\($0)/type") == "audio" }
         let aid = getString(mpv, "aid") ?? "no"
         guard hasAudio, aid != "no", (getString(mpv, "current-ao") ?? "").isEmpty else { return }
+        var position = 0.0
+        mpv_get_property(mpv, "time-pos", MPV_FORMAT_DOUBLE, &position)
+        let playing = !getFlag(mpv, "pause") && !getFlag(mpv, "paused-for-cache")
+        guard let startPosition, playing, position - startPosition >= 1.5 else {
+            queue.asyncAfter(deadline: .now() + 2) { [weak self] in self?.checkAudioOutput(generation, since: position) }
+            return
+        }
         audioRecoveryTried = true
         MPVLogBuffer.shared.append("[xt] no audio output opened — retrying with avfoundation")
         mpv_set_property_string(mpv, "ao", "avfoundation,coreaudio,audiounit,")

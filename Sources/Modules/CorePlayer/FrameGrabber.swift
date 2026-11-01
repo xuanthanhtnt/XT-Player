@@ -18,9 +18,16 @@ enum FrameGrabber {
         var resolutionLabel: String { VideoSignal(width: width, height: height).resolutionLabel }
     }
 
-    /// Blocking; call off the main thread. The frame is taken at `fraction` of the duration; nil = no frame.
-    static func grab(_ location: String, to output: URL, at fraction: Double = 0.2, timeout: TimeInterval = 45) -> Probe? {
-        guard let mpv = mpv_create() else { return nil }
+    /// Why no frame came back: the file has no picture to show (worth remembering), or it could not be read
+    /// right now (server asleep, network not back yet after the Mac woke up, disk full) and is tried again later.
+    enum Failure: Error {
+        case noPicture
+        case unavailable
+    }
+
+    /// Blocking; call off the main thread. The frame is taken at `fraction` of the duration.
+    static func grab(_ location: String, to output: URL, at fraction: Double = 0.2, timeout: TimeInterval = 45) -> Result<Probe, Failure> {
+        guard let mpv = mpv_create() else { return .failure(.unavailable) }
         defer { mpv_terminate_destroy(mpv) }
 
         let settings: [(String, String)] = [
@@ -48,9 +55,9 @@ enum FrameGrabber {
         for (name, value) in settings {
             mpv_set_option_string(mpv, name, value)
         }
-        guard mpv_initialize(mpv) >= 0 else { return nil }
+        guard mpv_initialize(mpv) >= 0 else { return .failure(.unavailable) }
         MPVStreamProtocols.register(on: mpv)
-        guard command(mpv, ["loadfile", location]) else { return nil }
+        guard command(mpv, ["loadfile", location]) else { return .failure(.unavailable) }
 
         // Paused from the start, mpv stops on the first frame after the initial seek.
         let deadline = Date().addingTimeInterval(timeout)
@@ -60,24 +67,28 @@ enum FrameGrabber {
             case MPV_EVENT_PLAYBACK_RESTART:
                 for _ in 0..<10 {
                     if let image = rawFrame(mpv) {
-                        guard writeJPEG(image, to: output) else { return nil }
+                        guard writeJPEG(image, to: output) else { return .failure(.unavailable) }
                         var duration = 0.0
                         mpv_get_property(mpv, "duration", MPV_FORMAT_DOUBLE, &duration)
                         var width: Int64 = 0, height: Int64 = 0
                         mpv_get_property(mpv, "video-dec-params/w", MPV_FORMAT_INT64, &width)
                         mpv_get_property(mpv, "video-dec-params/h", MPV_FORMAT_INT64, &height)
-                        return Probe(duration: duration, width: Int(width), height: Int(height))
+                        return .success(Probe(duration: duration, width: Int(width), height: Int(height)))
                     }
                     Thread.sleep(forTimeInterval: 0.2)
                 }
-                return nil
-            case MPV_EVENT_END_FILE, MPV_EVENT_SHUTDOWN:
-                return nil
+                return .failure(.noPicture)
+            case MPV_EVENT_END_FILE:
+                // Opened but nothing to show (a track without a cover picture) vs. not opened at all.
+                let end = event.pointee.data?.assumingMemoryBound(to: mpv_event_end_file.self).pointee
+                return .failure(end?.error == MPV_ERROR_NOTHING_TO_PLAY.rawValue ? .noPicture : .unavailable)
+            case MPV_EVENT_SHUTDOWN:
+                return .failure(.unavailable)
             default:
                 continue
             }
         }
-        return nil
+        return .failure(.unavailable)
     }
 
     /// The displayed frame as a CGImage (`screenshot-raw` returns bgr0 pixels). Also used by `ScrubThumbnailer`.

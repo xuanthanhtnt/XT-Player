@@ -15,14 +15,14 @@
 
 ---
 
-## Trạng thái: v0.3.2 — trình phát nhạc kiểu Roon, thư viện Nhạc & Video ca nhạc, nhạc hi-res
+## Trạng thái: v0.3.3 — Apple TV phát 4K / VP9 ổn định, Mac không còn văng khi khoá màn hình và giữ màn hình sáng khi xem
 
 | Hạng mục | Có trong v0.2.1 |
 |---|---|
-| Lõi phát | libmpv 0.41 + **FFmpeg 9.0.2 build riêng** (thêm DSD, WavPack, MLP, S/PDIF, VVC… — xem `Packages/MPVKit`), `vo=gpu-next` (Vulkan → MoltenVK → Metal), **giải mã phần cứng VideoToolbox bật/tắt được** (cả khi đang phát), deinterlace tự động |
+| Lõi phát | libmpv 0.41 (**vá lỗi CoreAudio** làm văng app khi đổi thiết bị âm thanh) + **FFmpeg 9.0.2 build riêng** (thêm DSD, WavPack, MLP, S/PDIF, VVC… — xem `Packages/MPVKit`), `vo=gpu-next` (Vulkan → MoltenVK → Metal), **giải mã phần cứng VideoToolbox bật/tắt được** (cả khi đang phát; VP9 / AV1 trên iPhone, iPad, Apple TV từ iOS / tvOS 26.2), deinterlace tự động |
 | Hình ảnh | **Chất lượng hình ảnh** Cân bằng / Cao / Tối đa: phóng to EWA Lanczos (Tối đa: Lanczos 4 nhánh cho cả màu), khử dải màu, tone-map HDR theo đỉnh sáng từng cảnh; **Chuyển động mượt** (display-resample + oversample: hết giật phim 24p trên màn 60 Hz, không hiệu ứng “phim truyền hình”) |
 | HDR | HDR10 / HLG passthrough, Dolby Vision P5/P8 qua libplacebo + libdovi, tone-map → SDR khi màn hình không hỗ trợ |
-| Apple TV | Match Content: tự đổi tần số quét & dải động (`AVDisplayManager`) |
+| Apple TV | Match Content: tự đổi tần số quét & dải động (`AVDisplayManager`); video 4K tự dùng chất lượng hình *Cân bằng* (Cao / Tối đa quá nặng cho chip); thanh bên có mục **Video ca nhạc** |
 | Âm thanh | TrueHD, DTS-HD MA, DTS:X, E-AC3/Atmos → PCM 7.1 lossless; **nhạc hi-res**: FLAC / ALAC / WAV / AIFF tới 24-bit 192 kHz, **DSD (DSF / DFF, SACD DST)**, **WavPack**, APE, TTA, TAK, Musepack, file DTS / TrueHD / MLP rời; phát đúng tần số gốc (Mac: khớp tần số DAC; iPhone/iPad: DAC USB / Lightning), bảng Thông tin cho biết có lấy mẫu lại hay không; macOS **bitstream qua HDMI** (AC3 / E-AC3 / DTS, TrueHD / DTS-HD nếu cổng HDMI nhận); **Tăng thoại** (kênh giữa to hơn, vòm / siêu trầm nhỏ lại; stereo: nâng phần giữa); **Chế độ ban đêm** (nén dải động từ metadata Dolby AC3 / E-AC3); Mac: **khớp tần số lấy mẫu** với DAC; chỉnh lệch tiếng ±50 ms |
 | Phụ đề | libass (.ass giữ hiệu ứng), .srt/.vtt/PGS; **tự nạp phụ đề cạnh file trên NAS**; lệch ±0,1 s; cỡ/vị trí/nền chữ |
 | Ổ mạng | **SMB2/3** (SMBClient thuần Swift, stream thẳng vào mpv qua `xtsmb://`, không transcode; **4 kết nối song song + đọc trước + cache khối**, tự kết nối lại khi NAS ngắt), **WebDAV** (HTTP/HTTPS, Basic/Digest, chứng chỉ tự ký), **tự tìm NAS bằng Bonjour**; **ảnh thu nhỏ từng video khi duyệt thư mục** (như Infuse), duyệt và phát cả **file nhạc**; mật khẩu trong Keychain |

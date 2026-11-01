@@ -185,6 +185,8 @@ struct PlayerScreen: View {
             if known, engine.state == .playing { scrobble(.start) }
         }
         .onChange(of: engine.state) { _, state in
+            // Screen stays on while a video plays; paused or finished, the normal idle timeout applies again.
+            DisplaySleepBlocker.set(state == .playing && !isMusic(current))
             switch state {
             case .playing: scrobble(.start)
             case .paused: scrobble(.pause)
@@ -213,6 +215,10 @@ struct PlayerScreen: View {
         .persistentSystemOverlays(.hidden)
         #endif
         #if os(tvOS)
+        // Moving around the controls with the remote counts as using them: the bar stays up while you do.
+        .onReceive(NotificationCenter.default.publisher(for: UIFocusSystem.didUpdateNotification)) { _ in
+            if controlsVisible { scheduleHide() }
+        }
         .onPlayPauseCommand {
             togglePlayback()
             showControls()
@@ -429,9 +435,6 @@ struct PlayerScreen: View {
         nowPlaying.attach(to: engine)
         nowPlaying.onNext = { advance(by: 1) }
         nowPlaying.onPrevious = { advance(by: -1) }
-        #if os(iOS) || os(tvOS)
-        UIApplication.shared.isIdleTimerDisabled = true
-        #endif
         load(current)
     }
 
@@ -470,9 +473,7 @@ struct PlayerScreen: View {
         #if os(macOS)
         window.detach()
         #endif
-        #if os(iOS) || os(tvOS)
-        UIApplication.shared.isIdleTimerDisabled = false
-        #endif
+        DisplaySleepBlocker.set(false)
     }
 
     private func close() {
@@ -633,10 +634,16 @@ struct PlayerScreen: View {
         #endif
     }
 
+    #if os(tvOS)
+    private static let autoHideDelay: Double = 8
+    #else
+    private static let autoHideDelay: Double = 5
+    #endif
+
     private func scheduleHide() {
         hideTask?.cancel()
         hideTask = Task {
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: .seconds(Self.autoHideDelay))
             guard !Task.isCancelled, engine.state == .playing, panel == nil, !pointerOnControls else { return }
             hideControls()
         }

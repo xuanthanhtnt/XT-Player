@@ -294,10 +294,13 @@ final class LibraryScanner: ObservableObject {
         let entries = Dictionary(((try? context.fetch(FetchDescriptor<MediaEntry>())) ?? []).map { ($0.key, $0) },
                                  uniquingKeysWith: { first, _ in first })
         let previousStatus = status
+        // A server that cannot be read right now (asleep, network not back after a wake) is not asked again in
+        // this pass: every file would wait for the timeout and then be taken for a file without a picture.
+        var unreachable: Set<String> = []
 
         for (index, item) in items.enumerated() {
             let files = (filesByItem[item.key] ?? []).sorted { ($0.season ?? 0, $0.episode ?? 0, $0.path) < ($1.season ?? 0, $1.episode ?? 0, $1.path) }
-            guard let file = files.first, let serverID = file.serverID, let server = servers[serverID],
+            guard let file = files.first, let serverID = file.serverID, !unreachable.contains(serverID), let server = servers[serverID],
                   let url = RemoteFileSystems.playbackURL(server: server, path: file.path) else { continue }
             let reference = ThumbnailStore.reference(forKey: file.key)
             guard let output = ThumbnailStore.url(for: reference) else { continue }
@@ -309,9 +312,15 @@ final class LibraryScanner: ObservableObject {
                 let location = url.absoluteString
                 // An album's picture is the cover embedded in its first track (shown by mpv as a still frame).
                 let fraction = item.kind == .album ? 0.0 : 0.2
-                guard let probe = await Task.detached(priority: .utility, operation: { FrameGrabber.grab(location, to: output, at: fraction) }).value
-                else {
+                let probe: FrameGrabber.Probe
+                switch await Task.detached(priority: .utility, operation: { FrameGrabber.grab(location, to: output, at: fraction) }).value {
+                case let .success(result):
+                    probe = result
+                case .failure(.noPicture):
                     ThumbnailStore.markFailed(file.key)
+                    continue
+                case .failure(.unavailable):
+                    unreachable.insert(serverID)
                     continue
                 }
                 if item.kind != .album {
@@ -335,9 +344,9 @@ final class LibraryScanner: ObservableObject {
             if !FileManager.default.fileExists(atPath: output.path) {
                 let scoped = source.scoped?.startAccessingSecurityScopedResource() ?? false
                 let location = source.location
-                let probe = await Task.detached(priority: .utility, operation: { FrameGrabber.grab(location, to: output) }).value
+                let result = await Task.detached(priority: .utility, operation: { FrameGrabber.grab(location, to: output) }).value
                 if scoped { source.scoped?.stopAccessingSecurityScopedResource() }
-                guard probe != nil else { continue }
+                guard case .success = result else { continue }
             }
             entry.artworkPath = reference
             try? context.save()

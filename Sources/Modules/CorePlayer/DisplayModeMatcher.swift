@@ -14,7 +14,7 @@ final class DisplayModeMatcher {
     /// Returns true when tvOS started a display mode switch (the caller should hold playback briefly).
     @discardableResult
     func match(_ signal: VideoSignal, window: UIWindow?) -> Bool {
-        guard let manager = window?.avDisplayManager,
+        guard let manager = Self.manager(window),
               manager.isDisplayCriteriaMatchingEnabled,
               signal.width > 0, signal.height > 0,
               signal != applied
@@ -27,12 +27,20 @@ final class DisplayModeMatcher {
     }
 
     func isSwitching(window: UIWindow?) -> Bool {
-        window?.avDisplayManager.isDisplayModeSwitchInProgress ?? false
+        Self.manager(window)?.isDisplayModeSwitchInProgress ?? false
     }
 
     func reset(window: UIWindow?) {
         applied = nil
-        window?.avDisplayManager.preferredDisplayCriteria = nil
+        Self.manager(window)?.preferredDisplayCriteria = nil
+    }
+
+    /// `avDisplayManager` comes from an AVKit category on UIWindow: if AVKit is not loaded the property does
+    /// not exist and touching it throws "unrecognized selector" (every video crashed that way). Without it
+    /// the TV simply keeps its current mode.
+    private static func manager(_ window: UIWindow?) -> AVDisplayManager? {
+        guard let window, window.responds(to: #selector(getter: UIWindow.avDisplayManager)) else { return nil }
+        return window.avDisplayManager
     }
 
     private static func formatDescription(for signal: VideoSignal) -> CMVideoFormatDescription? {

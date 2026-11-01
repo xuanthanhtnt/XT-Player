@@ -13,7 +13,7 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "0.3.2"
+    MARKETING_VERSION: "0.3.3"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
     PRODUCT_NAME: XTPlayer
@@ -94,6 +94,9 @@ targets:
         product: MPVKit
       - package: SMBClient
         product: SMBClient
+      # UIWindow.avDisplayManager (Match Content) is an AVKit category: nothing else references an AVKit
+      # symbol since AVDisplayCriteria moved to AVFoundation, so without this AVKit is not linked at all.
+      - sdk: AVKit.framework
     settings:
       base:
         TARGETED_DEVICE_FAMILY: "3"
