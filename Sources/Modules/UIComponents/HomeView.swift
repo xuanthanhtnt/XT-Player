@@ -214,6 +214,10 @@ struct FeaturedHero: View {
                 .overlay(
                     LinearGradient(colors: [Theme.background.opacity(0.85), .clear], startPoint: .leading, endPoint: .center)
                 )
+                #if os(tvOS)
+                // Edge to edge, under the menu rail too: the picture stopped short of both sides of the TV.
+                .ignoresSafeArea(edges: .horizontal)
+                #endif
 
             VStack(alignment: .leading, spacing: 12) {
                 Text(item.kind == .show ? "TV SHOW" : item.kind == .musicVideo ? "VIDEO CA NHẠC" : "PHIM")
@@ -290,8 +294,8 @@ struct FeaturedHero: View {
     }
 
     #if os(tvOS)
-    static let height: CGFloat = 860
-    static let titleSize: CGFloat = 72
+    static let height: CGFloat = 640
+    static let titleSize: CGFloat = 56
     #elseif os(macOS)
     static let height: CGFloat = 520
     static let titleSize: CGFloat = 46

@@ -112,7 +112,7 @@ struct AlbumsView: View {
                     ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .frame(maxWidth: 420)
+                .frame(maxWidth: Theme.segmentedWidth)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: AlbumCard.width, maximum: AlbumCard.width * 1.2), spacing: Self.spacing)],
                           alignment: .leading, spacing: Self.spacing) {
                     ForEach(albums) { AlbumLink(item: $0, index: index) }
@@ -163,7 +163,7 @@ struct MusicVideosView: View {
                     Text("Nghệ sĩ / chương trình").tag(true)
                 }
                 .pickerStyle(.segmented)
-                .frame(maxWidth: 420)
+                .frame(maxWidth: Theme.segmentedWidth)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: Theme.landscapeWidth, maximum: Theme.landscapeWidth * 1.3), spacing: AlbumsView.spacing)],
                           alignment: .leading, spacing: AlbumsView.spacing) {
                     ForEach(videos) { MusicVideoLink(item: $0, index: index) }
@@ -195,12 +195,19 @@ struct MusicLibraryView: View {
     @State private var page = Page.albums
     @ObservedObject private var music = MusicPlayer.shared
 
+    /// Apple TV lists music videos in its own menu entry.
+    #if os(tvOS)
+    private static let pages: [Page] = [.albums, .artists]
+    #else
+    private static let pages = Page.allCases
+    #endif
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 16) {
                     Picker("Nhạc", selection: $page) {
-                        ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
+                        ForEach(Self.pages) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .frame(maxWidth: 480)

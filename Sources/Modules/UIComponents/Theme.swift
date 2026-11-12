@@ -11,13 +11,17 @@ enum Theme {
     static let brandGradient = LinearGradient(colors: [lime, leaf, forest], startPoint: .topLeading, endPoint: .bottomTrailing)
 
     #if os(tvOS)
-    static let pagePadding: CGFloat = 80
-    static let cardMinWidth: CGFloat = 420
-    static let corner: CGFloat = 28
-    static let posterWidth: CGFloat = 250
-    static let landscapeWidth: CGFloat = 440
+    // Sized so a shelf shows six or seven posters across the TV, not four (the screen looked zoomed in).
+    static let pagePadding: CGFloat = 70
+    /// Three segments in the tvOS font size.
+    static let segmentedWidth: CGFloat = 600
+    static let cardMinWidth: CGFloat = 340
+    static let corner: CGFloat = 22
+    static let posterWidth: CGFloat = 190
+    static let landscapeWidth: CGFloat = 340
     #else
     static let pagePadding: CGFloat = 24
+    static let segmentedWidth: CGFloat = 420
     static let cardMinWidth: CGFloat = 280
     static let corner: CGFloat = 20
     static let posterWidth: CGFloat = 140

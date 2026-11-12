@@ -141,7 +141,11 @@ struct MusicNowPlayingView: View {
 
     var body: some View {
         if let engine = music.engine, let current = music.current {
+            #if os(tvOS)
+            TVNowPlaying(engine: engine, item: current)
+            #else
             NowPlayingContent(engine: engine, item: current)
+            #endif
         } else {
             Color.black.onAppear { music.showsNowPlaying = false }
         }
@@ -258,6 +262,211 @@ private struct NowPlayingContent: View {
     }
 }
 
+#if os(tvOS)
+/// Apple TV Now Playing, made for the room: the cover large on a slowly drifting blur of itself, the title big
+/// beside it, glass buttons that grow under the focus, and the queue sliding in from the right. Track changes
+/// cross-fade instead of jumping.
+private struct TVNowPlaying: View {
+    @ObservedObject var engine: MPVPlayerEngine
+    @ObservedObject private var music = MusicPlayer.shared
+    let item: PlaybackItem
+    @State private var showsQueue = false
+    @State private var drift = false
+    @FocusState private var focus: Control?
+
+    enum Control: Hashable { case shuffle, previous, playPause, next, repeatMode, queue }
+
+    var body: some View {
+        ZStack {
+            Theme.background
+            backdrop
+            HStack(alignment: .center, spacing: showsQueue ? 54 : 96) {
+                cover
+                details
+                if showsQueue {
+                    QueueList()
+                        .padding(28)
+                        .frame(width: 600)
+                        .frame(maxHeight: 820)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+                        .focusSection()
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .padding(.horizontal, showsQueue ? 90 : 130)
+            .padding(.vertical, 90)
+        }
+        .ignoresSafeArea()
+        .foregroundStyle(.white)
+        .environment(\.colorScheme, .dark)
+        .environment(\.dynamicTypeSize, .xSmall)
+        .animation(.spring(response: 0.5, dampingFraction: 0.86), value: showsQueue)
+        .animation(.easeInOut(duration: 0.6), value: item.id)
+        .defaultFocus($focus, .playPause)
+        .onAppear { drift = true }
+        .onExitCommand {
+            if showsQueue { showsQueue = false; focus = .queue } else { music.showsNowPlaying = false }
+        }
+        .onPlayPauseCommand { music.togglePause() }
+    }
+
+    /// The cover, many times its size and blurred, drifting and turning slowly: the screen never sits still.
+    private var backdrop: some View {
+        // A 64 px copy stretched over the screen is soft already; a light blur finishes it (a 110 pt blur of the
+        // full picture left the Apple TV showing nothing at all).
+        ArtworkImage(path: item.artworkPath, size: "blur", placeholderIcon: "music.note")
+            .scaleEffect(drift ? 1.5 : 1.2)
+            .rotationEffect(.degrees(drift ? 6 : -6))
+            .blur(radius: 40)
+            .saturation(1.4)
+            .animation(.easeInOut(duration: 28).repeatForever(autoreverses: true), value: drift)
+            .overlay(
+                LinearGradient(colors: [.black.opacity(0.15), .black.opacity(0.45), .black.opacity(0.8)],
+                               startPoint: .top, endPoint: .bottom)
+            )
+            .overlay(
+                LinearGradient(colors: [.black.opacity(0.35), .clear], startPoint: .leading, endPoint: .trailing)
+            )
+            .id(item.artworkPath ?? item.id.uuidString)
+            .transition(.opacity)
+    }
+
+    private var cover: some View {
+        let side: CGFloat = showsQueue ? 380 : 560
+        return ArtworkImage(path: item.artworkPath, size: "w780", placeholderIcon: "music.note")
+            .frame(width: side, height: side)
+            .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 30, style: .continuous).strokeBorder(.white.opacity(0.08)))
+            .shadow(color: .black.opacity(0.55), radius: 60, y: 30)
+            // Breathes with playback, as in Music: full size while playing, set back when paused.
+            .scaleEffect(engine.state == .playing ? 1 : 0.9)
+            .animation(.spring(response: 0.55, dampingFraction: 0.72), value: engine.state == .playing)
+            .id(item.id)
+            .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.94)), removal: .opacity))
+    }
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 26) {
+            Text(music.queue.count > 1 ? "ĐANG PHÁT · BÀI \(music.index + 1)/\(music.queue.count)" : "ĐANG PHÁT")
+                .font(.caption.weight(.heavy))
+                .tracking(3)
+                .foregroundStyle(Theme.leaf)
+            VStack(alignment: .leading, spacing: 10) {
+                Text(item.title)
+                    .font(.system(size: showsQueue ? 40 : 52, weight: .bold))
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
+                if let subtitle = item.subtitle {
+                    Text(subtitle).font(.title3).foregroundStyle(.white.opacity(0.7)).lineLimit(2)
+                }
+            }
+            .id(item.id)
+            .transition(.opacity.combined(with: .offset(y: 12)))
+            SignalPathBadge(engine: engine).fixedSize()
+            TVProgress(engine: engine).padding(.top, 8)
+            HStack(spacing: 34) {
+                TVRoundButton(icon: "backward.fill", size: 80) { music.previous() }
+                    .focused($focus, equals: .previous)
+                TVRoundButton(icon: engine.state == .playing ? "pause.fill" : "play.fill", size: 104, prominent: true) { music.togglePause() }
+                    .focused($focus, equals: .playPause)
+                TVRoundButton(icon: "forward.fill", size: 80) { music.next() }
+                    .focused($focus, equals: .next)
+            }
+            .padding(.top, 6)
+            HStack(spacing: 22) {
+                TVRoundButton(icon: "shuffle", size: 60, active: music.isShuffled) { music.toggleShuffle() }
+                    .focused($focus, equals: .shuffle)
+                TVRoundButton(icon: music.repeatMode == .one ? "repeat.1" : "repeat", size: 60, active: music.repeatMode != .off) { music.cycleRepeat() }
+                    .focused($focus, equals: .repeatMode)
+                TVRoundButton(icon: "list.bullet", size: 60, active: showsQueue) { showsQueue.toggle() }
+                    .focused($focus, equals: .queue)
+                AudioOptionsMenu(engine: engine)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .focusSection()
+    }
+}
+
+/// Thick progress line with the times under it; it glides between position updates.
+private struct TVProgress: View {
+    @ObservedObject var engine: MPVPlayerEngine
+
+    var body: some View {
+        let fraction = engine.duration > 0 ? min(1, max(0, engine.position / engine.duration)) : 0
+        VStack(spacing: 12) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.white.opacity(0.18))
+                    Capsule()
+                        .fill(LinearGradient(colors: [Theme.leaf, Theme.leaf.opacity(0.75)], startPoint: .leading, endPoint: .trailing))
+                        .frame(width: max(12, geo.size.width * fraction))
+                        .animation(.linear(duration: 0.5), value: fraction)
+                }
+            }
+            .frame(height: 12)
+            HStack {
+                Text(TimeFormat.clock(engine.position))
+                Spacer()
+                Text("-" + TimeFormat.clock(max(0, engine.duration - engine.position)))
+            }
+            .font(.callout.monospacedDigit().weight(.medium))
+            .foregroundStyle(.white.opacity(0.65))
+        }
+        .frame(maxWidth: 720)
+    }
+}
+
+/// Round glass button: grows and turns white under the focus, like the system's own.
+private struct TVRoundButton: View {
+    let icon: String
+    let size: CGFloat
+    var prominent = false
+    var active = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: size * 0.36, weight: .bold))
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: size, height: size)
+        }
+        .buttonStyle(TVRoundStyle(prominent: prominent, active: active))
+    }
+}
+
+private struct TVRoundStyle: ButtonStyle {
+    let prominent: Bool
+    let active: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        Face(configuration: configuration, prominent: prominent, active: active)
+    }
+
+    private struct Face: View {
+        let configuration: ButtonStyleConfiguration
+        let prominent: Bool
+        let active: Bool
+        @Environment(\.isFocused) private var isFocused
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(isFocused ? Color.black : active ? Theme.leaf : Color.white)
+                .background {
+                    Circle()
+                        .fill(isFocused ? AnyShapeStyle(Color.white) : prominent ? AnyShapeStyle(Color.white.opacity(0.22)) : AnyShapeStyle(.ultraThinMaterial))
+                }
+                .overlay(Circle().strokeBorder(.white.opacity(isFocused ? 0 : 0.12)))
+                .shadow(color: .black.opacity(isFocused ? 0.45 : 0), radius: 22, y: 12)
+                .scaleEffect(configuration.isPressed ? 0.94 : isFocused ? 1.16 : 1)
+                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
+                .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+        }
+    }
+}
+#endif
+
 /// Sound processing for what is playing (the same switches as Settings ▸ Âm thanh), next to the queue button.
 private struct AudioOptionsMenu: View {
     @ObservedObject var engine: MPVPlayerEngine
@@ -271,15 +480,24 @@ private struct AudioOptionsMenu: View {
             Toggle("Khớp tần số lấy mẫu với thiết bị", isOn: Binding(get: { engine.matchSampleRate }, set: { engine.setMatchSampleRate($0) }))
             #endif
         } label: {
+            #if os(tvOS)
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 22, weight: .bold))
+                .frame(width: 60, height: 60)
+            #else
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: 17, weight: .semibold))
                 .frame(width: 36, height: 32)
                 .contentShape(Rectangle())
+            #endif
         }
         #if os(macOS)
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        #elseif os(tvOS)
+        .menuStyle(.button)
+        .buttonStyle(TVRoundStyle(prominent: false, active: engine.dialogBoost || engine.nightMode))
         #endif
         .help("Xử lý âm thanh")
     }
@@ -294,12 +512,16 @@ struct QueueList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Hàng đợi").font(.title3.weight(.bold))
-                Text("\(music.upcoming.count) bài tiếp theo").font(.caption).foregroundStyle(.white.opacity(0.6))
+                Text("Hàng đợi").font(.title3.weight(.bold)).lineLimit(1).fixedSize()
+                #if !os(tvOS)
+                Text("\(music.upcoming.count) bài tiếp theo").font(.caption).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
+                #endif
                 Spacer()
                 if !music.upcoming.isEmpty {
                     Button("Xoá hàng đợi") { music.clearUpcoming() }
                         .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                        .fixedSize()
                         #if !os(tvOS)
                         .buttonStyle(.plain)
                         #endif

@@ -199,6 +199,7 @@ final class LibraryScanner: ObservableObject {
                   let data = try? await fs.download(cover.path), !data.isEmpty else { continue }
             try? FileManager.default.createDirectory(at: ThumbnailStore.directory, withIntermediateDirectories: true)
             guard (try? data.write(to: output)) != nil else { continue }
+            ThumbnailStore.announce(output)
             album.posterPath = ThumbnailStore.reference(forKey: "cover:" + key)
             album.backdropPath = album.posterPath
         }
@@ -281,13 +282,18 @@ final class LibraryScanner: ObservableObject {
 
     /// Items without TMDb artwork (home videos, concerts, unmatched titles) and Continue Watching entries
     /// without a picture get a frame of their video, as Infuse does. Runs after each scan and once at launch.
-    func generateMissingArtwork(context: ModelContext) async {
+    /// `firstPass`: only what can be done without Trakt — music, music videos, and pictures made here before that
+    /// are gone (the cache was emptied) — so the home page fills in while Trakt is still being asked.
+    func generateMissingArtwork(context: ModelContext, firstPass: Bool = false) async {
         guard !isGeneratingArtwork else { return }
         isGeneratingArtwork = true
         defer { isGeneratingArtwork = false }
 
-        let items = ((try? context.fetch(FetchDescriptor<LibraryItem>())) ?? [])
+        // Newest first: the home page shows those.
+        let items = ((try? context.fetch(FetchDescriptor<LibraryItem>(sortBy: [SortDescriptor(\.addedAt, order: .reverse)]))) ?? [])
             .filter { !ThumbnailStore.isUsable($0.posterPath) && !ThumbnailStore.isUsable($0.backdropPath) }
+            .filter { !firstPass || $0.kind == .album || $0.kind == .musicVideo
+                || ($0.posterPath ?? $0.backdropPath ?? "").hasPrefix(ThumbnailStore.prefix) }
         let filesByItem = Dictionary(grouping: (try? context.fetch(FetchDescriptor<LibraryFile>())) ?? [], by: \.itemKey)
         let servers = Dictionary(((try? context.fetch(FetchDescriptor<MediaServer>())) ?? []).map { ($0.id, $0.credentials) },
                                  uniquingKeysWith: { first, _ in first })
@@ -330,14 +336,15 @@ final class LibraryScanner: ObservableObject {
             item.posterPath = reference
             item.backdropPath = reference
             for file in files {
-                if let entry = entries[file.key], entry.artworkPath == nil { entry.artworkPath = reference }
+                if let entry = entries[file.key], !ThumbnailStore.isUsable(entry.artworkPath) { entry.artworkPath = reference }
             }
             try? context.save()
         }
 
         // Continue Watching entries that are not library files: opened from a share, from WebDAV, or a file on
         // this device (read through its security-scoped bookmark).
-        for entry in entries.values where entry.artworkPath == nil {
+        guard !firstPass else { status = previousStatus; return }
+        for entry in entries.values where !ThumbnailStore.isUsable(entry.artworkPath) {
             guard let source = Self.grabSource(for: entry, servers: servers) else { continue }
             let reference = ThumbnailStore.reference(forKey: entry.key)
             guard let output = ThumbnailStore.url(for: reference) else { continue }

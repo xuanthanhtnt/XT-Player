@@ -131,7 +131,9 @@ enum FrameGrabber {
         try? FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard let destination = CGImageDestinationCreateWithURL(output as CFURL, "public.jpeg" as CFString, 1, nil) else { return false }
         CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
-        return CGImageDestinationFinalize(destination)
+        guard CGImageDestinationFinalize(destination) else { return false }
+        ThumbnailStore.announce(output)
+        return true
     }
 
     static func command(_ mpv: OpaquePointer, _ words: [String]) -> Bool {
@@ -142,13 +144,43 @@ enum FrameGrabber {
     }
 }
 
+extension Notification.Name {
+    /// object: the file name of a picture just written to `ThumbnailStore.directory`.
+    static let xtArtworkWritten = Notification.Name("xt.artworkWritten")
+}
+
 /// Artwork generated on the device, referenced from the TMDb image fields as "local:<file name>"
 /// (`TMDbClient.imageURL` resolves it). Kept in Caches: if the system purges it, it is generated again.
 enum ThumbnailStore {
     static let prefix = "local:"
 
-    static var directory: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("Thumbnails", isDirectory: true)
+    /// Mac / iPhone / iPad: Application Support. In Caches the pictures were deleted by the system whenever the
+    /// disk ran low, and all of them had to be read again from the NAS at the next launch while the home page
+    /// waited. Apple TV only allows Caches for data like this.
+    static let directory: URL = {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("Thumbnails", isDirectory: true)
+        #if os(tvOS)
+        return caches
+        #else
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Thumbnails", isDirectory: true)
+        let fm = FileManager.default
+        try? fm.createDirectory(at: support, withIntermediateDirectories: true)
+        // Pictures made by earlier versions move over once.
+        if let old = try? fm.contentsOfDirectory(atPath: caches.path) {
+            for name in old where !fm.fileExists(atPath: support.appendingPathComponent(name).path) {
+                try? fm.moveItem(at: caches.appendingPathComponent(name), to: support.appendingPathComponent(name))
+            }
+            try? fm.removeItem(at: caches)
+        }
+        return support
+        #endif
+    }()
+
+    /// Tells artwork views waiting for this file that it now exists (they keep their placeholder otherwise).
+    static func announce(_ file: URL) {
+        let name = file.lastPathComponent
+        DispatchQueue.main.async { NotificationCenter.default.post(name: .xtArtworkWritten, object: name) }
     }
 
     /// Stable reference for the library file `key`.
