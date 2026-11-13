@@ -95,7 +95,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ env.SPM_DIR }}
-          key: spm-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          key: spm-${{ runner.os }}-${{ hashFiles('project.yml', 'Packages/MPVKit/Package.swift') }}
           restore-keys: spm-${{ runner.os }}-
 
       - name: Resolve packages
@@ -125,6 +125,9 @@ jobs:
             -disableAutomaticPackageResolution \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             TMDB_API_KEY="${{ secrets.TMDB_API_KEY }}" \
+            OPENSUBTITLES_API_KEY="${{ secrets.OPENSUBTITLES_API_KEY }}" \
+            TRAKT_CLIENT_ID="${{ secrets.TRAKT_CLIENT_ID }}" \
+            TRAKT_CLIENT_SECRET="${{ secrets.TRAKT_CLIENT_SECRET }}" \
             "${SIGNING[@]}"
 
       - name: Package
@@ -279,7 +282,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ env.SPM_DIR }}
-          key: spm-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          key: spm-${{ runner.os }}-${{ hashFiles('project.yml', 'Packages/MPVKit/Package.swift') }}
           restore-keys: spm-${{ runner.os }}-
 
       - name: App Store Connect API key

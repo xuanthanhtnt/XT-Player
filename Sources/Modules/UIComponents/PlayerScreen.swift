@@ -11,6 +11,13 @@ struct PlayerScreen: View {
     let onClose: () -> Void
 
     @StateObject private var engine = MPVPlayerEngine()
+    #if !os(tvOS)
+    @StateObject private var airPlay = AirPlayController()
+    #endif
+    @StateObject private var thumbnails = ScrubThumbnailer()
+    /// What Trakt is told about the current file (nil = not something Trakt knows).
+    @State private var traktMedia: TraktMedia?
+    @State private var traktStopped = true
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppSettings.autoplayNext) private var autoplayNext = true
@@ -53,6 +60,14 @@ struct PlayerScreen: View {
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
 
+            // Music without a picture track: the album cover and title instead of a black screen (files with an
+            // embedded cover show it through mpv as a still frame).
+            if engine.videoCodec.isEmpty, engine.state != .loading, !engine.audioTracks.isEmpty {
+                NowPlayingArtwork(title: current.title, subtitle: current.subtitle, artworkPath: current.artworkPath)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+
             inputLayer
 
             #if os(macOS)
@@ -65,7 +80,7 @@ struct PlayerScreen: View {
             }
             #endif
 
-            if controlsVisible {
+            if controlsVisible && !airPlayActive {
                 PlayerControlsOverlay(
                     engine: engine,
                     title: current.title,
@@ -88,30 +103,54 @@ struct PlayerScreen: View {
                         pointerOnControls = inside
                         if !inside { scheduleHide() }
                     },
-                    onInteraction: scheduleHide
+                    onInteraction: scheduleHide,
+                    airPlay: airPlayController,
+                    thumbnails: thumbnails
                 )
                 .transition(.opacity)
             }
 
+            #if !os(tvOS)
+            if airPlay.isActive {
+                AirPlayActiveView(controller: airPlay, title: current.title, onClose: close)
+                    .transition(.opacity)
+            }
+            #endif
+
             if engine.isBuffering || engine.state == .loading {
-                ProgressView()
-                    #if !os(tvOS)
-                    .controlSize(.large)
-                    #endif
-                    .tint(.white)
-                    .padding(28)
-                    .glassPanel(cornerRadius: 24)
-                    .allowsHitTesting(false)
+                VStack(spacing: 12) {
+                    ProgressView()
+                        #if !os(tvOS)
+                        .controlSize(.large)
+                        #endif
+                        .tint(.white)
+                    if engine.isBuffering && engine.bufferingProgress > 0 {
+                        Text("\(engine.bufferingProgress)%")
+                            .font(.callout.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.85))
+                    }
+                }
+                .padding(28)
+                .glassPanel(cornerRadius: 24)
+                .allowsHitTesting(false)
             }
 
             if let text = seekFlash ?? scrubText {
-                Text(text)
-                    .font(.title2.weight(.bold).monospacedDigit())
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 12)
-                    .glassPanel(cornerRadius: 18)
-                    .transition(.scale.combined(with: .opacity))
-                    .allowsHitTesting(false)
+                VStack(spacing: 10) {
+                    if seekFlash == nil, let target = scrubTarget, let image = thumbnails.image(at: target) {
+                        ScrubPreviewImage(image: image, width: 280)
+                    }
+                    Text(text)
+                        .font(.title2.weight(.bold).monospacedDigit())
+                }
+                .padding(.horizontal, 22)
+                .padding(.vertical, 12)
+                .glassPanel(cornerRadius: 18)
+                .transition(.scale.combined(with: .opacity))
+                .allowsHitTesting(false)
+                .onChange(of: scrubTarget) { _, target in
+                    if let target { thumbnails.request(target) }
+                }
             }
 
             if let countdown = upNextCountdown, let next {
@@ -124,16 +163,47 @@ struct PlayerScreen: View {
         }
         .animation(.easeInOut(duration: 0.25), value: controlsVisible)
         .animation(.easeInOut(duration: 0.25), value: upNextCountdown != nil)
+        #if !os(tvOS)
+        .alert("AirPlay", isPresented: Binding(get: { airPlay.message != nil }, set: { if !$0 { airPlay.message = nil } })) {
+            Button("OK", role: .cancel) { airPlay.message = nil }
+        } message: {
+            Text(airPlay.message ?? "")
+        }
+        #endif
         .onAppear(perform: start)
         .onDisappear(perform: stop)
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { saveProgress() }
         }
+        .onChange(of: engine.video.resolutionLabel) { _, label in
+            guard !label.isEmpty else { return }
+            MediaLibrary.learn(fileKey: current.key, resolution: label, duration: engine.duration, in: context)
+        }
+        // mpv often reports the duration just after "playing": the start scrobble waits for it, otherwise
+        // the pause / stop scrobbles that follow it are skipped too and Trakt never sees the file.
+        .onChange(of: engine.duration > 0) { _, known in
+            if known, engine.state == .playing { scrobble(.start) }
+        }
         .onChange(of: engine.state) { _, state in
+            // Screen stays on while a video plays; paused or finished, the normal idle timeout applies again.
+            DisplaySleepBlocker.set(state == .playing && !isMusic(current))
+            switch state {
+            case .playing: scrobble(.start)
+            case .paused: scrobble(.pause)
+            case .ended: scrobble(.stop, progress: 100)
+            default: break
+            }
             switch state {
             case .ended:
                 saveProgress()
-                if next != nil, autoplayNext { startUpNext() } else { showControls(autoHide: false) }
+                if next != nil, isMusic(current) {
+                    // An album plays straight on, without the films' "Up Next" countdown.
+                    advance(by: 1)
+                } else if next != nil, autoplayNext {
+                    startUpNext()
+                } else {
+                    showControls(autoHide: false)
+                }
             case .paused:
                 showControls(autoHide: false)
             default:
@@ -145,6 +215,10 @@ struct PlayerScreen: View {
         .persistentSystemOverlays(.hidden)
         #endif
         #if os(tvOS)
+        // Moving around the controls with the remote counts as using them: the bar stays up while you do.
+        .onReceive(NotificationCenter.default.publisher(for: UIFocusSystem.didUpdateNotification)) { _ in
+            if controlsVisible { scheduleHide() }
+        }
         .onPlayPauseCommand {
             togglePlayback()
             showControls()
@@ -335,6 +409,11 @@ struct PlayerScreen: View {
         #endif
     }
 
+    /// Where a swipe-to-seek would land.
+    private var scrubTarget: Double? {
+        scrubDelta.map { max(0, min(engine.duration, engine.position + $0)) }
+    }
+
     private var scrubText: String? {
         guard let scrubDelta else { return nil }
         let target = max(0, min(engine.duration, engine.position + scrubDelta))
@@ -345,21 +424,33 @@ struct PlayerScreen: View {
     // MARK: Lifecycle
 
     private func start() {
+        #if !os(tvOS)
+        airPlay.currentPosition = { [engine] in engine.position }
+        airPlay.onStart = { [engine] in engine.pause() }
+        airPlay.onFinish = { [engine] position in
+            engine.seek(to: position)
+            engine.play()
+        }
+        #endif
         nowPlaying.attach(to: engine)
         nowPlaying.onNext = { advance(by: 1) }
         nowPlaying.onPrevious = { advance(by: -1) }
-        #if os(iOS) || os(tvOS)
-        UIApplication.shared.isIdleTimerDisabled = true
-        #endif
         load(current)
     }
 
     private func load(_ item: PlaybackItem) {
         cancelUpNext()
+        scrobble(.stop)
+        traktMedia = TraktMedia.from(fileKey: item.key, fallbackName: item.source.displayName, in: context)
         access = SecurityScopedAccess(item.source.url)
         if let server = item.server { RemoteCredentialStore.shared.register(server) }
         entry = MediaLibrary.touch(item, in: context)
         try? context.save()
+        #if !os(tvOS)
+        if airPlay.isActive { airPlay.shutdown() }
+        airPlay.location = item.source.playbackLocation
+        #endif
+        thumbnails.reset(location: item.source.playbackLocation)
         engine.load(item.source.playbackLocation, startAt: item.startAt, externalSubtitles: item.externalSubtitles)
         nowPlaying.setItem(title: item.title, subtitle: item.subtitle,
                            artworkURL: TMDbClient.imageURL(item.artworkPath, size: "w780"))
@@ -370,15 +461,19 @@ struct PlayerScreen: View {
         hideTask?.cancel()
         cancelUpNext()
         saveProgress()
+        scrobble(.stop)
+        traktMedia = nil
+        #if !os(tvOS)
+        airPlay.shutdown()
+        #endif
+        thumbnails.reset(location: nil)
         nowPlaying.detach()
         engine.shutdown()
         access = nil
         #if os(macOS)
         window.detach()
         #endif
-        #if os(iOS) || os(tvOS)
-        UIApplication.shared.isIdleTimerDisabled = false
-        #endif
+        DisplaySleepBlocker.set(false)
     }
 
     private func close() {
@@ -387,9 +482,46 @@ struct PlayerScreen: View {
     }
 
     private func saveProgress() {
+        #if !os(tvOS)
+        if airPlay.isActive, let entry, airPlay.duration > 0 {
+            MediaLibrary.saveProgress(entry, position: airPlay.position, duration: airPlay.duration, in: context)
+            return
+        }
+        #endif
         guard let entry, engine.duration > 0 || engine.position > 0 else { return }
         let finished = engine.state == .ended
         MediaLibrary.saveProgress(entry, position: finished ? engine.duration : engine.position, duration: engine.duration, in: context)
+    }
+
+    /// Trakt scrobble for the current file; a stop under 80 % leaves a resume point other devices pick up.
+    private func scrobble(_ action: TraktService.ScrobbleAction, progress: Double? = nil) {
+        guard let traktMedia, engine.duration > 0 else { return }
+        switch action {
+        case .start: traktStopped = false
+        case .pause: guard !traktStopped else { return }
+        case .stop:
+            guard !traktStopped else { return }
+            traktStopped = true
+        }
+        TraktService.shared.scrobble(action, media: traktMedia, progress: progress ?? engine.position / engine.duration * 100)
+    }
+
+    private var airPlayActive: Bool {
+        #if os(tvOS)
+        return false
+        #else
+        return airPlay.isActive
+        #endif
+    }
+
+    #if os(tvOS)
+    private var airPlayController: Void? { nil }
+    #else
+    private var airPlayController: AirPlayController? { airPlay }
+    #endif
+
+    private func isMusic(_ item: PlaybackItem) -> Bool {
+        FilenameParser.audioExtensions.contains((item.source.displayName as NSString).pathExtension.lowercased())
     }
 
     private func advance(by step: Int) {
@@ -461,6 +593,9 @@ struct PlayerScreen: View {
     // MARK: Helpers
 
     private func togglePlayback() {
+        #if !os(tvOS)
+        if airPlay.isActive { return airPlay.togglePlayback() }
+        #endif
         if engine.state == .ended {
             engine.seek(to: 0)
             engine.play()
@@ -470,6 +605,9 @@ struct PlayerScreen: View {
     }
 
     private func jump(_ seconds: Double) {
+        #if !os(tvOS)
+        if airPlay.isActive { return airPlay.seek(by: seconds) }
+        #endif
         engine.seek(by: seconds)
         withAnimation(.spring(duration: 0.25)) { seekFlash = seconds > 0 ? "+\(Int(seconds))s" : "\(Int(seconds))s" }
         Task {
@@ -496,10 +634,16 @@ struct PlayerScreen: View {
         #endif
     }
 
+    #if os(tvOS)
+    private static let autoHideDelay: Double = 8
+    #else
+    private static let autoHideDelay: Double = 5
+    #endif
+
     private func scheduleHide() {
         hideTask?.cancel()
         hideTask = Task {
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: .seconds(Self.autoHideDelay))
             guard !Task.isCancelled, engine.state == .playing, panel == nil, !pointerOnControls else { return }
             hideControls()
         }
@@ -526,4 +670,41 @@ struct PlayerScreen: View {
         .frame(maxWidth: 560)
         .glassPanel()
     }
+}
+
+/// Cover, title and artist for audio-only files.
+private struct NowPlayingArtwork: View {
+    let title: String
+    let subtitle: String?
+    let artworkPath: String?
+
+    var body: some View {
+        ZStack {
+            ArtworkImage(path: artworkPath, size: "w780", placeholderIcon: "music.note")
+                .blur(radius: 60)
+                .opacity(0.35)
+                .ignoresSafeArea()
+            VStack(spacing: 18) {
+                ArtworkImage(path: artworkPath, size: "w500", placeholderIcon: "music.note")
+                    .frame(width: Self.cover, height: Self.cover)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .shadow(color: .black.opacity(0.5), radius: 24, y: 10)
+                VStack(spacing: 4) {
+                    Text(title).font(.title2.weight(.bold)).multilineTextAlignment(.center)
+                    if let subtitle, !subtitle.isEmpty {
+                        Text(subtitle).font(.callout).foregroundStyle(.white.opacity(0.7)).multilineTextAlignment(.center)
+                    }
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 40)
+            }
+            .padding(.bottom, 80)
+        }
+    }
+
+    #if os(tvOS)
+    static let cover: CGFloat = 420
+    #else
+    static let cover: CGFloat = 260
+    #endif
 }

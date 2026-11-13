@@ -15,6 +15,8 @@ final class NowPlayingController {
     private var cancellables: Set<AnyCancellable> = []
     private var info: [String: Any] = [:]
     private var commandTargets: [(MPRemoteCommand, Any)] = []
+    private var syncedPosition = 0.0
+    private var syncedAt = Date.distantPast
     var onNext: (() -> Void)?
     var onPrevious: (() -> Void)?
 
@@ -22,7 +24,7 @@ final class NowPlayingController {
         self.engine = engine
         engine.$position
             .throttle(for: .seconds(1), scheduler: DispatchQueue.main, latest: true)
-            .sink { [weak self] _ in self?.updatePlayback() }
+            .sink { [weak self] position in self?.positionChanged(position) }
             .store(in: &cancellables)
         engine.$state
             .sink { [weak self] _ in DispatchQueue.main.async { self?.updatePlayback() } }
@@ -34,8 +36,9 @@ final class NowPlayingController {
         registerCommands()
     }
 
-    func setItem(title: String, subtitle: String?, artworkURL: URL?) {
-        info = [MPMediaItemPropertyTitle: title, MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.video.rawValue]
+    func setItem(title: String, subtitle: String?, artworkURL: URL?, isMusic: Bool = false) {
+        let type: MPNowPlayingInfoMediaType = isMusic ? .audio : .video
+        info = [MPMediaItemPropertyTitle: title, MPNowPlayingInfoPropertyMediaType: type.rawValue]
         if let subtitle { info[MPMediaItemPropertyArtist] = subtitle }
         updatePlayback()
         guard let artworkURL else { return }
@@ -64,8 +67,18 @@ final class NowPlayingController {
         #endif
     }
 
+    /// Now Playing extrapolates the elapsed time from the rate, so only a jump (seek, chapter, stall) is sent.
+    private func positionChanged(_ position: Double) {
+        guard let engine else { return }
+        let rate = engine.state == .playing ? engine.speed : 0
+        let expected = syncedPosition + Date().timeIntervalSince(syncedAt) * rate
+        if abs(position - expected) > 1.5 { updatePlayback() }
+    }
+
     private func updatePlayback() {
         guard let engine, !info.isEmpty else { return }
+        syncedPosition = engine.position
+        syncedAt = Date()
         info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = engine.position
         info[MPMediaItemPropertyPlaybackDuration] = engine.duration
         info[MPNowPlayingInfoPropertyPlaybackRate] = engine.state == .playing ? engine.speed : 0.0

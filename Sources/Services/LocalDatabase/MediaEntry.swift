@@ -42,14 +42,52 @@ final class MediaEntry {
 
     /// Where playback should start: resume unless the item was (nearly) finished.
     var resumePosition: Double? {
-        guard position > 30, duration <= 0 || position < duration - 60 else { return nil }
+        guard position > 30, !isWatched else { return nil }
         return position
     }
 
-    var isWatched: Bool { duration > 0 && position >= duration - 60 }
+    /// Finished: the last minute reached, or 90 % (end credits of a film, the outro of a music video).
+    var isWatched: Bool { duration > 0 && (position >= duration - 60 || position >= duration * 0.9) }
+
+    /// Opened and played for a while, finished or not ("Unwatched" leaves these out, like Infuse).
+    var isStarted: Bool { position > 10 || isWatched }
 }
 
 enum MediaLibrary {
+    private static let resolutionBadges: Set<String> = ["4K", "1080p", "720p", "SD"]
+
+    /// What playback or the artwork probe found out about a library file: its resolution badge (when the file
+    /// name has none) and, for movies TMDb did not match, the running time — like Infuse's "2 hrs 40 min · 1080p".
+    static func learn(fileKey: String, resolution: String, duration: Double, in context: ModelContext) {
+        var fileQuery = FetchDescriptor<LibraryFile>(predicate: #Predicate { $0.key == fileKey })
+        fileQuery.fetchLimit = 1
+        guard let file = try? context.fetch(fileQuery).first else { return }
+        var changed = false
+        if !resolution.isEmpty, !file.badges.contains(where: resolutionBadges.contains) {
+            file.badges.insert(resolution, at: 0)
+            changed = true
+        }
+        let itemKey = file.itemKey
+        var itemQuery = FetchDescriptor<LibraryItem>(predicate: #Predicate { $0.key == itemKey })
+        itemQuery.fetchLimit = 1
+        if duration > 60, let item = try? context.fetch(itemQuery).first, item.kind == .movie, item.runtime == nil {
+            item.runtime = Int((duration / 60).rounded())
+            changed = true
+        }
+        if changed { try? context.save() }
+    }
+
+    /// What a track turned out to be when played ("FLAC · 96 kHz · 24-bit"), kept as the file's second badge.
+    static func learnTrack(fileKey: String, quality: String, in context: ModelContext) {
+        var fileQuery = FetchDescriptor<LibraryFile>(predicate: #Predicate { $0.key == fileKey })
+        fileQuery.fetchLimit = 1
+        guard let file = try? context.fetch(fileQuery).first else { return }
+        let format = file.badges.first ?? quality
+        guard file.badges.count < 2 || file.badges[1] != quality else { return }
+        file.badges = [format, quality]
+        try? context.save()
+    }
+
     static func entry(forKey key: String, in context: ModelContext) -> MediaEntry? {
         var descriptor = FetchDescriptor<MediaEntry>(predicate: #Predicate { $0.key == key })
         descriptor.fetchLimit = 1
@@ -84,12 +122,17 @@ enum MediaLibrary {
         return entry
     }
 
+    /// A new entry for a library file that has not been played on this device yet.
+    static func makeEntry(key: String, title: String, in context: ModelContext) -> MediaEntry {
+        let entry = MediaEntry(key: key, title: title, urlString: key, bookmark: nil, isLocalFile: key.hasPrefix("/"), tags: [])
+        context.insert(entry)
+        return entry
+    }
+
+    /// Marks watched / unwatched here and on Trakt when connected.
+    @MainActor
     static func setWatched(_ watched: Bool, key: String, title: String, in context: ModelContext) {
-        let entry = entry(forKey: key, in: context) ?? {
-            let e = MediaEntry(key: key, title: title, urlString: key, bookmark: nil, isLocalFile: key.hasPrefix("/"), tags: [])
-            context.insert(e)
-            return e
-        }()
+        let entry = entry(forKey: key, in: context) ?? makeEntry(key: key, title: title, in: context)
         if watched {
             if entry.duration <= 0 { entry.duration = 1 }
             entry.position = entry.duration
@@ -97,6 +140,9 @@ enum MediaLibrary {
             entry.position = 0
         }
         try? context.save()
+        if let media = TraktMedia.from(fileKey: key, fallbackName: nil, in: context) {
+            TraktService.shared.setWatched(watched, media: [media])
+        }
     }
 
     static func saveProgress(_ entry: MediaEntry, position: Double, duration: Double, in context: ModelContext) {

@@ -44,6 +44,18 @@ struct PlayerControlsOverlay: View {
     /// macOS: the pointer entered / left the control bar (the controls stay up while it is there).
     var onHoverControls: (Bool) -> Void = { _ in }
     let onInteraction: () -> Void
+    #if os(tvOS)
+    var airPlay: Void? = nil
+    #else
+    var airPlay: AirPlayController? = nil
+    #endif
+    @ObservedObject var thumbnails: ScrubThumbnailer
+
+    #if os(tvOS)
+    /// The controls are rebuilt each time they appear and the hidden remote catcher has just been disabled, so
+    /// nothing holds focus: without this the remote moved nowhere after the bar came back.
+    @FocusState private var playPauseFocused: Bool
+    #endif
 
     /// Time shown while dragging the scrubber, and until the seek lands.
     @State private var scrubPosition: Double?
@@ -57,6 +69,10 @@ struct PlayerControlsOverlay: View {
                 // Drop the scrub preview once playback has caught up with the seek.
                 if !isScrubbing, let target = scrubPosition, abs(position - target) < 1.5 { scrubPosition = nil }
             }
+        #elseif os(tvOS)
+        touchBody
+            .defaultFocus($playPauseFocused, true)
+            .onAppear { DispatchQueue.main.async { playPauseFocused = true } }
         #else
         touchBody
         #endif
@@ -124,10 +140,17 @@ struct PlayerControlsOverlay: View {
                             onInteraction()
                         })
                         .frame(width: 80)
-                        .help("Âm lượng — M: tắt / bật tiếng")
+                        .disabled(engine.isBitstreaming)
+                        .opacity(engine.isBitstreaming ? 0.4 : 1)
+                        .help(engine.isBitstreaming ? "Đang bitstream qua HDMI — chỉnh âm lượng trên ampli / receiver"
+                                                    : "Âm lượng — M: tắt / bật tiếng")
                     }
                     Spacer(minLength: 0)
                     HStack(spacing: 0) {
+                        if let airPlay {
+                            AirPlayButton(controller: airPlay, size: 28)
+                                .frame(width: 36, height: 30)
+                        }
                         barButton(help: "Âm thanh, phụ đề, video, thông tin") {
                             panel = panel == nil ? .audio : nil
                         } label: {
@@ -183,6 +206,10 @@ struct PlayerControlsOverlay: View {
                         return [engine.chapters.last { $0.time <= time }?.title, TimeFormat.clock(time)].compactMap { $0 }
                     },
                     bubbleLift: 50,
+                    preview: { at in thumbnails.image(at: at * engine.duration) },
+                    onPointer: { at in
+                        if let at, engine.duration > 0 { thumbnails.request(at * engine.duration) }
+                    },
                     onChange: { at in
                         isScrubbing = true
                         scrubPosition = at * engine.duration
@@ -311,7 +338,7 @@ struct PlayerControlsOverlay: View {
     }
 
     private var nextHelp: String {
-        hasNextChapter ? "Chương tiếp" : (hasNext ? "Tập tiếp (N)" : "Không có mục tiếp theo")
+        hasNextChapter ? "Chương tiếp" : (hasNext ? (engine.videoCodec.isEmpty ? "Bài tiếp (N)" : "Tập tiếp (N)") : "Không có mục tiếp theo")
     }
 
     private static let barHeight: CGFloat = 80
@@ -372,6 +399,12 @@ struct PlayerControlsOverlay: View {
             }
             Spacer(minLength: 0)
 
+            #if os(iOS)
+            if let airPlay {
+                AirPlayButton(controller: airPlay, size: 36)
+            }
+            #endif
+
             if showStartOver {
                 Button {
                     engine.seek(to: 0)
@@ -424,6 +457,7 @@ struct PlayerControlsOverlay: View {
                     if hasPrevious { tvButton("backward.end.fill") { onPrevious() } }
                     tvButton(Self.skipIcon("gobackward", skipBack)) { engine.seek(by: -skipBack) }
                     tvButton(playPauseIcon) { togglePlayback() }
+                        .focused($playPauseFocused)
                     tvButton(Self.skipIcon("goforward", skipForward)) { engine.seek(by: skipForward) }
                     if hasNext { tvButton("forward.end.fill") { onNext() } }
                     #else
@@ -435,6 +469,9 @@ struct PlayerControlsOverlay: View {
                     #endif
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                #if os(tvOS)
+                .focusSection()
+                #endif
 
                 HStack(spacing: 8) {
                     if !engine.chapters.isEmpty { panelButton(.chapters, icon: "list.bullet.rectangle") }
@@ -444,6 +481,9 @@ struct PlayerControlsOverlay: View {
                     panelButton(.info, icon: "info.circle")
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
+                #if os(tvOS)
+                .focusSection()
+                #endif
             }
         }
         .padding(.horizontal, Self.panelPadding)
@@ -468,7 +508,11 @@ struct PlayerControlsOverlay: View {
             ScrubBar(position: engine.position, duration: engine.duration,
                      bufferedUntil: engine.position + engine.bufferedSeconds, marks: chapterMarks,
                      chapters: engine.chapters, scrubPosition: $scrubPosition,
-                     onCommit: { engine.seek(to: $0) }, onInteraction: onInteraction)
+                     onCommit: { engine.seek(to: $0) }, onInteraction: onInteraction,
+                     preview: scrubPosition.flatMap { thumbnails.image(at: $0) })
+                .onChange(of: scrubPosition) { _, position in
+                    if let position { thumbnails.request(position) }
+                }
             #endif
             Text("-" + TimeFormat.clock(max(0, engine.duration - (scrubPosition ?? engine.position))))
                 .frame(minWidth: Self.timeWidth, alignment: .trailing)
@@ -484,7 +528,10 @@ struct PlayerControlsOverlay: View {
         } label: {
             Label(target.title, systemImage: icon)
                 .font(.callout.weight(.semibold))
-                #if !os(tvOS)
+                #if os(tvOS)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                #else
                 .labelStyle(.iconOnly)
                 .foregroundStyle(panel == target ? Theme.leaf : .white)
                 .frame(width: 36, height: 36)
@@ -562,6 +609,14 @@ struct PlayerControlsOverlay: View {
 
     private func panelCard(_ current: PlayerPanel) -> some View {
         VStack(alignment: .leading, spacing: 0) {
+            #if os(tvOS)
+            // The same four buttons sit right under the bar on Apple TV: the panel only needs its name.
+            Text(current.title)
+                .font(.title3.weight(.bold))
+                .padding(.horizontal, 28)
+                .padding(.top, 24)
+                .padding(.bottom, 8)
+            #else
             HStack(spacing: 8) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 4) {
@@ -606,12 +661,13 @@ struct PlayerControlsOverlay: View {
             .padding(.horizontal, 14)
             .padding(.top, 14)
             .padding(.bottom, 8)
+            #endif
 
             ScrollView {
                 Group {
                     switch current {
                     case .audio: AudioPanel(engine: engine, onInteraction: onInteraction)
-                    case .subtitles: SubtitlePanel(engine: engine, onInteraction: onInteraction)
+                    case .subtitles: SubtitlePanel(engine: engine, title: title, onInteraction: onInteraction)
                     case .video: VideoPanel(engine: engine, onInteraction: onInteraction)
                     case .chapters: ChaptersPanel(engine: engine, onInteraction: onInteraction)
                     case .info: InfoPanel(engine: engine)
@@ -623,6 +679,8 @@ struct PlayerControlsOverlay: View {
         .frame(maxHeight: .infinity)
         #if os(tvOS)
         .background(Color.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        // Up from the buttons under the bar lands in the panel, wherever its rows sit.
+        .focusSection()
         #else
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(0.07)))
@@ -713,6 +771,10 @@ struct PlayerSlider: View {
     /// Lines of the bubble shown above the pointer while hovering or dragging; nil = no bubble.
     var bubble: ((Double) -> [String])?
     var bubbleLift: CGFloat = 40
+    /// Preview frame shown above the bubble (scrub thumbnails).
+    var preview: ((Double) -> CGImage?)?
+    /// Where the pointer hovers or drags (nil = left), so previews can be requested.
+    var onPointer: ((Double?) -> Void)?
     let onChange: (Double) -> Void
     var onEnd: (Double) -> Void = { _ in }
 
@@ -757,11 +819,13 @@ struct PlayerSlider: View {
                     .onChanged { drag in
                         let at = fraction(drag.location.x, travel: travel)
                         dragging = at
+                        onPointer?(at)
                         onChange(at)
                     }
                     .onEnded { drag in
                         let at = fraction(drag.location.x, travel: travel)
                         dragging = nil
+                        onPointer?(hover)
                         onEnd(at)
                     }
             )
@@ -770,11 +834,18 @@ struct PlayerSlider: View {
                 case let .active(point): hover = fraction(point.x, travel: travel)
                 case .ended: hover = nil
                 }
+                if dragging == nil { onPointer?(hover) }
             }
             .overlay(alignment: .topLeading) {
                 if isEnabled, let bubble, let at = dragging ?? hover {
                     let lines = bubble(at)
+                    let image = preview?(at)
+                    let margin: CGFloat = image == nil ? 50 : 104
                     VStack(spacing: 1) {
+                        if let image {
+                            ScrubPreviewImage(image: image, width: 192)
+                                .padding(.bottom, 4)
+                        }
                         ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                             Text(line)
                                 .font(index < lines.count - 1 ? Font.caption2 : Font.caption.weight(.semibold).monospacedDigit())
@@ -785,7 +856,8 @@ struct PlayerSlider: View {
                     .padding(.vertical, 5)
                     .background(Color.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .fixedSize()
-                    .position(x: min(max(knobSize / 2 + travel * at, 50), max(50, width - 50)), y: geo.size.height / 2 - bubbleLift)
+                    .position(x: min(max(knobSize / 2 + travel * at, margin), max(margin, width - margin)),
+                              y: geo.size.height / 2 - bubbleLift - (image == nil ? 0 : 58))
                     .allowsHitTesting(false)
                 }
             }
@@ -844,6 +916,7 @@ struct ScrubBar: View {
     @Binding var scrubPosition: Double?
     let onCommit: (Double) -> Void
     let onInteraction: () -> Void
+    var preview: CGImage?
 
     var body: some View {
         GeometryReader { geo in
@@ -874,6 +947,10 @@ struct ScrubBar: View {
                 if let scrubPosition {
                     let x = CGFloat(scrubPosition / max(duration, 1)) * width
                     VStack(spacing: 2) {
+                        if let preview {
+                            ScrubPreviewImage(image: preview, width: 160)
+                                .padding(.bottom, 2)
+                        }
                         if let chapter = chapters.last(where: { $0.time <= scrubPosition })?.title {
                             Text(chapter).font(.caption2).lineLimit(1)
                         }
@@ -883,7 +960,7 @@ struct ScrubBar: View {
                     .padding(.vertical, 4)
                     .background(Color.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .fixedSize()
-                    .position(x: min(max(x, 40), width - 40), y: -18)
+                    .position(x: min(max(x, preview == nil ? 40 : 88), width - (preview == nil ? 40 : 88)), y: preview == nil ? -18 : -66)
                     .allowsHitTesting(false)
                 }
             }
@@ -950,6 +1027,7 @@ struct SignalBadges: View {
             if !engine.audio.codec.isEmpty {
                 TagChip(text: engine.audio.codec + (engine.audio.channels > 0 ? " " + MediaTrack.channelLayout(engine.audio.channels) : ""))
             }
+            if engine.audio.isHighResolution { TagChip(text: "Hi-Res", highlighted: true) }
         }
         .fixedSize()
     }
@@ -1086,11 +1164,20 @@ struct AudioPanel: View {
                 }
             }
             #endif
-            PanelSection(title: "Night Mode") {
-                PanelChoice(text: "Nén dải động — nghe rõ thoại khi để nhỏ", detail: engine.nightMode ? "Bật" : "Tắt",
+            PanelSection(title: "Cải thiện âm thanh") {
+                PanelChoice(text: "Tăng thoại — lời nói rõ hơn nhạc nền", detail: engine.dialogBoost ? "Bật" : "Tắt",
+                            selected: engine.dialogBoost) {
+                    engine.setDialogBoost(!engine.dialogBoost)
+                    onInteraction()
+                }
+                PanelChoice(text: "Chế độ ban đêm — tiếng nổ bớt to", detail: engine.nightMode ? "Bật" : "Tắt",
                             selected: engine.nightMode) {
                     engine.setNightMode(!engine.nightMode)
                     onInteraction()
+                }
+                if engine.isBitstreaming {
+                    Text("Đang bitstream qua HDMI: ampli tự xử lý âm thanh.")
+                        .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 8)
                 }
             }
             PanelSection(title: "Đồng bộ") {
@@ -1108,6 +1195,7 @@ struct AudioPanel: View {
 
 struct SubtitlePanel: View {
     @ObservedObject var engine: MPVPlayerEngine
+    let title: String
     let onInteraction: () -> Void
 
     var body: some View {
@@ -1124,6 +1212,7 @@ struct SubtitlePanel: View {
                     }
                 }
             }
+            OnlineSubtitlesSection(engine: engine, title: title, onInteraction: onInteraction)
             PanelSection(title: "Đồng bộ") {
                 PanelStepper(title: "Lệch phụ đề", value: String(format: "%+.1f s", engine.subtitleDelay),
                              minus: { engine.adjustSubtitleDelay(by: -0.1); onInteraction() },
@@ -1159,6 +1248,30 @@ struct VideoPanel: View {
                     }
                 }
             }
+            PanelSection(title: "Chất lượng hình ảnh") {
+                ForEach(PictureQuality.allCases) { quality in
+                    PanelChoice(text: quality.label, detail: quality.detail, selected: engine.pictureQuality == quality) {
+                        engine.setPictureQuality(quality)
+                        onInteraction()
+                    }
+                }
+            }
+            PanelSection(title: "Tối ưu") {
+                PanelChoice(text: "Giải mã phần cứng", detail: engine.hardwareDecoding ? "Bật" : "Tắt", selected: engine.hardwareDecoding) {
+                    engine.setHardwareDecoding(!engine.hardwareDecoding)
+                    onInteraction()
+                }
+                #if !os(tvOS)
+                PanelChoice(text: "Chuyển động mượt (khử rung 24p)", detail: engine.motionSmoothing ? "Bật" : "Tắt", selected: engine.motionSmoothing) {
+                    engine.setMotionSmoothing(!engine.motionSmoothing)
+                    onInteraction()
+                }
+                #endif
+                if engine.droppedFrames > 0 {
+                    Text("Đã rớt \(engine.droppedFrames) khung hình — nếu hình giật, hạ chất lượng hình ảnh hoặc bật giải mã phần cứng.")
+                        .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 8)
+                }
+            }
             PanelSection(title: "Tốc độ phát") {
                 ForEach(PlayerControlsOverlay.playbackSpeeds, id: \.self) { value in
                     PanelChoice(text: PlayerControlsOverlay.speedText(value), selected: abs(engine.speed - value) < 0.01) {
@@ -1192,9 +1305,28 @@ struct ChaptersPanel: View {
 }
 
 /// Technical details of what is playing, and the tail of the libmpv log (copyable for bug reports).
+#if os(tvOS)
+/// tvOS scrolls only by moving focus, so read-only rows take focus (with a light highlight); otherwise the Info
+/// panel could not be read past what fits on screen.
+private struct FocusableRow: ViewModifier {
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(focused ? Color.white.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .focusable()
+            .focused($focused)
+    }
+}
+#endif
+
 struct InfoPanel: View {
     @ObservedObject var engine: MPVPlayerEngine
     @State private var logLines: [String] = []
+    @State private var bridgeRate: Double = 0
+    @State private var lastTraffic: (time: Date, bytes: Int64)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -1202,6 +1334,8 @@ struct InfoPanel: View {
                 SignalBadges(engine: engine, compact: false)
                 SignalBadges(engine: engine, compact: true)
             }
+            // Music files have no video track: skip the section instead of describing a decoder that is idle.
+            if !engine.videoCodec.isEmpty {
             section("Video") {
                 row("Định dạng", engine.videoCodec)
                 if engine.video.width > 0 { row("Độ phân giải", "\(engine.video.width) × \(engine.video.height)") }
@@ -1210,24 +1344,37 @@ struct InfoPanel: View {
                     row("Dải động", engine.video.dynamicRangeLabel(hdrOutput: engine.hdrOutputActive))
                     row("Màu", [engine.video.primaries, engine.video.gamma, engine.video.colorMatrix].filter { !$0.isEmpty }.joined(separator: " / "))
                 }
-                row("Giải mã", engine.hardwareDecoder.isEmpty || engine.hardwareDecoder == "no" ? "Phần mềm (CPU)" : "Phần cứng · \(engine.hardwareDecoder)")
+                row("Giải mã", Self.decoderText(engine))
+                row("Xử lý hình", Self.pictureText(engine) + (engine.motionSmoothing ? " · chuyển động mượt" : ""))
+                if engine.droppedFrames > 0 { row("Khung bị rớt", "\(engine.droppedFrames)", warning: engine.droppedFrames > 30) }
                 if engine.videoBitrate > 0 { row("Bitrate", Self.bitrate(engine.videoBitrate)) }
+            }
             }
             section("Âm thanh") {
                 row("Định dạng", engine.audio.codec)
                 if engine.audio.channels > 0 { row("Kênh", MediaTrack.channelLayout(engine.audio.channels)) }
-                if engine.audio.sampleRate > 0 { row("Tần số", String(format: "%.1f kHz", Double(engine.audio.sampleRate) / 1000)) }
-                if engine.audio.outputChannels > 0 { row("Kênh ra", MediaTrack.channelLayout(engine.audio.outputChannels)) }
-                row("Đầu ra", engine.audioOutput.isEmpty ? "Chưa mở — không có tiếng" : engine.audioOutput,
+                if engine.audio.sampleRate > 0 { row("Tần số", Self.kHz(Double(engine.audio.sampleRate)) + (engine.audio.isHighResolution ? " · Hi-Res" : "")) }
+                row("Mẫu giải mã", Self.sampleFormat(engine.audio.sampleFormat))
+                if !engine.isBitstreaming { row("Ra thiết bị", Self.outputRate(engine.audio)) }
+                if engine.audio.outputChannels > 0, !engine.isBitstreaming { row("Kênh ra", MediaTrack.channelLayout(engine.audio.outputChannels)) }
+                let enhancements = [engine.dialogBoost ? "Tăng thoại" : nil, engine.nightMode ? "Ban đêm" : nil].compactMap { $0 }
+                if !enhancements.isEmpty, !engine.isBitstreaming { row("Xử lý tiếng", enhancements.joined(separator: " · ")) }
+                row("Đầu ra", engine.audioOutput.isEmpty ? "Chưa mở — không có tiếng"
+                        : engine.isBitstreaming ? "Bitstream qua HDMI — âm lượng chỉnh trên ampli" : engine.audioOutput,
                     warning: engine.audioOutput.isEmpty && !engine.audioTracks.isEmpty)
                 row("Âm lượng", engine.isMuted ? "Đang tắt tiếng" : "\(Int(engine.volume))%", warning: engine.isMuted)
                 if engine.audioBitrate > 0 { row("Bitrate", Self.bitrate(engine.audioBitrate)) }
             }
             section("Bộ đệm") {
                 row("Đã nạp trước", "\(Int(engine.bufferedSeconds)) s")
+                let speed = engine.readsThroughBridge ? bridgeRate : engine.readSpeed
+                if speed > 0 { row("Tốc độ mạng", Self.bitrate(speed * 8)) }
             }
             section("Nhật ký libmpv") {
                 LogLines(lines: Array(logLines.suffix(60)))
+                    #if os(tvOS)
+                    .modifier(FocusableRow())
+                    #endif
                 LogActions(lines: logLines, onRefresh: refresh)
             }
         }
@@ -1241,7 +1388,14 @@ struct InfoPanel: View {
         }
     }
 
-    private func refresh() { logLines = MPVLogBuffer.shared.snapshot() }
+    private func refresh() {
+        logLines = MPVLogBuffer.shared.snapshot()
+        let now = Date(), bytes = StreamTrafficMeter.shared.totalBytes
+        if let last = lastTraffic, now.timeIntervalSince(last.time) > 0.5 {
+            bridgeRate = Double(bytes - last.bytes) / now.timeIntervalSince(last.time)
+        }
+        lastTraffic = (now, bytes)
+    }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1264,7 +1418,48 @@ struct InfoPanel: View {
                     .foregroundStyle(warning ? Theme.danger : .white)
             }
             .font(.callout)
+            #if os(tvOS)
+            .modifier(FocusableRow())
+            #endif
         }
+    }
+
+    /// The preset the renderer runs, and the chosen one when the 4K cap stepped in.
+    static func pictureText(_ engine: MPVPlayerEngine) -> String {
+        let effective = engine.effectivePictureQuality, chosen = engine.pictureQuality
+        return effective == chosen ? chosen.label : "\(effective.label) · \(chosen.label) quá nặng với 4K"
+    }
+
+    /// Hardware decoder in use; software only once frames are being decoded (before that mpv reports none).
+    static func decoderText(_ engine: MPVPlayerEngine) -> String {
+        if !engine.hardwareDecoder.isEmpty, engine.hardwareDecoder != "no" { return "Phần cứng · \(engine.hardwareDecoder)" }
+        guard engine.state == .playing || engine.state == .paused || engine.state == .ended else { return "" }
+        return engine.hardwareDecoding ? "Phần mềm (CPU) — chip không giải mã được định dạng này" : "Phần mềm (CPU) — đã tắt giải mã phần cứng"
+    }
+
+    static func kHz(_ hertz: Double) -> String {
+        String(format: hertz.truncatingRemainder(dividingBy: 1000) == 0 ? "%.0f kHz" : "%.1f kHz", hertz / 1000)
+    }
+
+    /// libavcodec's output format: what precision the decoder delivers.
+    static func sampleFormat(_ format: String) -> String {
+        switch format {
+        case "": return ""
+        case "u8", "u8p": return "8-bit"
+        case "s16", "s16p": return "16-bit"
+        case "s32", "s32p": return "24 / 32-bit nguyên (lossless)"
+        case "float", "floatp": return "32-bit float"
+        case "double", "doublep": return "64-bit float"
+        default: return format
+        }
+    }
+
+    /// Whether the file's rate reaches the hardware untouched, or who resamples it.
+    static func outputRate(_ audio: AudioSignal) -> String {
+        guard audio.sampleRate > 0, audio.outputSampleRate > 0 else { return "" }
+        let device = audio.deviceSampleRate > 0 ? audio.deviceSampleRate : Double(audio.outputSampleRate)
+        if audio.isNativeRate { return kHz(device) + " · đúng tần số gốc" }
+        return kHz(Double(audio.sampleRate)) + " → " + kHz(device) + " (lấy mẫu lại)"
     }
 
     static func bitrate(_ bitsPerSecond: Double) -> String {

@@ -42,9 +42,42 @@ struct ParsedMediaName: Equatable {
 enum FilenameParser {
     static let videoExtensions: Set<String> = [
         "mkv", "mp4", "m4v", "mov", "avi", "wmv", "ts", "m2ts", "mts", "webm", "flv", "iso", "mpg", "mpeg", "vob", "ogm", "rmvb",
+        "3gp", "3g2", "asf", "divx", "f4v", "m2v", "mxf", "nut", "ivf", "wtv", "rm", "dv", "vvc", "266",
     ]
 
-    static let subtitleExtensions: Set<String> = ["srt", "ass", "ssa", "vtt", "sub", "sup", "idx", "smi"]
+    /// Music and audio-only tracks: lossless and hi-res (FLAC, ALAC, WAV / AIFF / Wave64, DSD, WavPack, APE, TTA,
+    /// TAK), lossy, and raw Blu-ray / DVD-Audio tracks (DTS-HD, TrueHD, MLP).
+    static let audioExtensions: Set<String> = [
+        "flac", "m4a", "alac", "wav", "aif", "aiff", "aifc", "caf", "w64", "dsf", "dff", "wv", "ape", "tta", "tak",
+        "mp3", "aac", "ogg", "oga", "opus", "wma", "mpc", "shn", "mka", "mp2",
+        "ac3", "eac3", "ec3", "dts", "dtshd", "thd", "truehd", "mlp",
+    ]
+
+    static let subtitleExtensions: Set<String> = ["srt", "ass", "ssa", "vtt", "sub", "sup", "idx", "smi", "sami", "rt", "pjs", "stl", "jss", "mpl", "lrc"]
+
+    /// "01 - Song.flac", "1-03 Song.flac", "03. Song.dsf", "Artist - 04 - Song.mp3" → (disc, track, title).
+    static func track(_ rawName: String) -> (disc: Int?, number: Int?, title: String) {
+        var name = (rawName as NSString).deletingPathExtension.replacingOccurrences(of: "_", with: " ")
+        var disc: Int?, number: Int?
+        let patterns = [
+            #"^\s*(\d{1,2})[-.](\d{1,3})[\s.\-]+(.+)$"#,            // 1-03 Title, 1.03 Title
+            #"^\s*(\d{1,3})\s*[.\-)]?\s+(.+)$"#,                     // 03 Title, 03. Title, 03 - Title
+            #"^.+?\s-\s(\d{1,3})\s-\s(.+)$"#,                        // Artist - 04 - Title
+        ]
+        for (i, pattern) in patterns.enumerated() {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)) else { continue }
+            func group(_ n: Int) -> String { Range(match.range(at: n), in: name).map { String(name[$0]) } ?? "" }
+            if i == 0 {
+                disc = Int(group(1)); number = Int(group(2)); name = group(3)
+            } else {
+                number = Int(group(1)); name = group(2)
+            }
+            break
+        }
+        let title = name.trimmingCharacters(in: CharacterSet(charactersIn: " -.").union(.whitespaces))
+        return (disc, number, title.isEmpty ? (rawName as NSString).deletingPathExtension : title)
+    }
 
     static func parse(_ rawName: String) -> ParsedMediaName {
         var name = rawName

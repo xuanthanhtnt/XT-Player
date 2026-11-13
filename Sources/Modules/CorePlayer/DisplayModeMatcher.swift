@@ -14,7 +14,7 @@ final class DisplayModeMatcher {
     /// Returns true when tvOS started a display mode switch (the caller should hold playback briefly).
     @discardableResult
     func match(_ signal: VideoSignal, window: UIWindow?) -> Bool {
-        guard let manager = window?.avDisplayManager,
+        guard let manager = Self.manager(window),
               manager.isDisplayCriteriaMatchingEnabled,
               signal.width > 0, signal.height > 0,
               signal != applied
@@ -27,12 +27,20 @@ final class DisplayModeMatcher {
     }
 
     func isSwitching(window: UIWindow?) -> Bool {
-        window?.avDisplayManager.isDisplayModeSwitchInProgress ?? false
+        Self.manager(window)?.isDisplayModeSwitchInProgress ?? false
     }
 
     func reset(window: UIWindow?) {
         applied = nil
-        window?.avDisplayManager.preferredDisplayCriteria = nil
+        Self.manager(window)?.preferredDisplayCriteria = nil
+    }
+
+    /// `avDisplayManager` comes from an AVKit category on UIWindow: if AVKit is not loaded the property does
+    /// not exist and touching it throws "unrecognized selector" (every video crashed that way). Without it
+    /// the TV simply keeps its current mode.
+    private static func manager(_ window: UIWindow?) -> AVDisplayManager? {
+        guard let window, window.responds(to: #selector(getter: UIWindow.avDisplayManager)) else { return nil }
+        return window.avDisplayManager
     }
 
     private static func formatDescription(for signal: VideoSignal) -> CMVideoFormatDescription? {
@@ -87,6 +95,23 @@ enum AudioSessionConfigurator {
         } catch {
             #if DEBUG
             print("[XT-Player] audio session: \(error)")
+            #endif
+        }
+    }
+
+    /// Music: keeps playing in the background and with the screen locked (UIBackgroundModes audio).
+    static func activateForMusic() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            #if os(iOS)
+            try session.setCategory(.playback, mode: .default, policy: .longFormAudio, options: [])
+            #else
+            try session.setCategory(.playback, mode: .default, options: [])
+            #endif
+            try session.setActive(true)
+        } catch {
+            #if DEBUG
+            print("[XT-Player] audio session (music): \(error)")
             #endif
         }
     }

@@ -71,6 +71,12 @@ enum PlaybackFactory {
             if item.kind == .show, let code = file.episodeCode {
                 title = file.episodeTitle.map { "\(code) · \($0)" } ?? code
                 subtitle = item.title
+            } else if item.kind == .album {
+                title = file.episodeTitle ?? (file.fileName as NSString).deletingPathExtension
+                subtitle = [item.artist, item.title].compactMap { $0 }.joined(separator: " — ")
+            } else if item.kind == .musicVideo {
+                title = item.title
+                subtitle = item.artist
             } else {
                 title = item.year.map { "\(item.title) (\($0))" } ?? item.title
                 subtitle = file.badges.isEmpty ? nil : file.badges.joined(separator: " · ")

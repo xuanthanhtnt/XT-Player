@@ -11,13 +11,17 @@ enum Theme {
     static let brandGradient = LinearGradient(colors: [lime, leaf, forest], startPoint: .topLeading, endPoint: .bottomTrailing)
 
     #if os(tvOS)
-    static let pagePadding: CGFloat = 80
-    static let cardMinWidth: CGFloat = 420
-    static let corner: CGFloat = 28
-    static let posterWidth: CGFloat = 250
-    static let landscapeWidth: CGFloat = 440
+    // Sized so a shelf shows six or seven posters across the TV, not four (the screen looked zoomed in).
+    static let pagePadding: CGFloat = 70
+    /// Three segments in the tvOS font size.
+    static let segmentedWidth: CGFloat = 600
+    static let cardMinWidth: CGFloat = 340
+    static let corner: CGFloat = 22
+    static let posterWidth: CGFloat = 190
+    static let landscapeWidth: CGFloat = 340
     #else
     static let pagePadding: CGFloat = 24
+    static let segmentedWidth: CGFloat = 420
     static let cardMinWidth: CGFloat = 280
     static let corner: CGFloat = 20
     static let posterWidth: CGFloat = 140
@@ -88,6 +92,12 @@ enum TimeFormat {
         let total = Int(seconds.rounded(.down))
         let h = total / 3600, m = (total % 3600) / 60, s = total % 60
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+    }
+
+    /// Always with hours, as on Infuse's Resume button: "00:12:15".
+    static func fullClock(_ seconds: Double) -> String {
+        let total = seconds.isFinite && seconds > 0 ? Int(seconds.rounded(.down)) : 0
+        return String(format: "%02d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
     }
 }
 
