@@ -439,6 +439,10 @@ final class MPVPlayerEngine: ObservableObject {
     private var requestedQuality = PictureQuality.platformDefault // queue only
     private var appliedQuality: PictureQuality? // queue only: what the renderer runs, after the 4K cap
     private var sourceHeight = 0 // queue only
+    // queue only: what the audio badge knows, to notice when it stays incomplete while the music plays
+    private var knownAudioCodec = ""
+    private var knownSampleRate = 0
+    private var lastAudioRepair = Date.distantPast
     private var wantsNightMode = false          // queue only
     private var wantsDialogBoost = false        // queue only
     private var sourceChannels = 0              // queue only
@@ -826,6 +830,25 @@ final class MPVPlayerEngine: ObservableObject {
         }
     }
 
+    /// The music plays but the format or rate never arrived (Apple TV showed "Đang mở…" in place of the quality
+    /// for tracks from the NAS): read them straight from mpv, at most every 2 s.
+    private func repairAudioSignal(_ mpv: OpaquePointer) {
+        guard Date().timeIntervalSince(lastAudioRepair) > 2 else { return }
+        lastAudioRepair = Date()
+        let codec = knownAudioCodec.isEmpty ? (getString(mpv, "audio-codec-name").map(MediaTrack.prettyCodec) ?? "") : knownAudioCodec
+        let rate = knownSampleRate == 0 ? getInt(mpv, "audio-params/samplerate") : knownSampleRate
+        let format = getString(mpv, "audio-params/format") ?? ""
+        guard !codec.isEmpty || rate > 0 else { return }
+        MPVLogBuffer.shared.append("[xt] audio info read again: codec=\(codec.isEmpty ? "?" : codec) rate=\(rate) (codec was \(knownAudioCodec.isEmpty ? "missing" : "known"), rate was \(knownSampleRate))")
+        knownAudioCodec = codec
+        knownSampleRate = rate
+        publish {
+            if !codec.isEmpty { $0.audio.codec = codec }
+            if rate > 0 { $0.audio.sampleRate = rate }
+            if !format.isEmpty, $0.audio.sampleFormat.isEmpty { $0.audio.sampleFormat = format }
+        }
+    }
+
     /// iPhone, iPad and Apple TV GPUs cannot run the EWA scalers and debanding over a 4K frame in time: the
     /// picture stalled and the UI froze with it. Above 1440p those presets fall back to libmpv's defaults.
     private static func affordable(_ quality: PictureQuality, height: Int) -> PictureQuality {
@@ -1127,6 +1150,7 @@ final class MPVPlayerEngine: ObservableObject {
         switch name {
         case "time-pos":
             let t = double()
+            if t > 1.5, knownAudioCodec.isEmpty || knownSampleRate == 0 { repairAudioSignal(mpv) }
             if abs(t - lastPublishedTime) >= 0.25 || isPaused {
                 lastPublishedTime = t
                 publish { $0.position = t }
@@ -1210,6 +1234,7 @@ final class MPVPlayerEngine: ObservableObject {
             publish { $0.droppedFrames = v }
         case "audio-params/samplerate":
             let v = int()
+            knownSampleRate = v
             publish {
                 $0.audio.sampleRate = v
                 $0.followSourceSampleRate(v)
@@ -1297,11 +1322,13 @@ final class MPVPlayerEngine: ObservableObject {
                 subs.append(track)
             }
         }
+        let selectedCodec = selectedAudio?.codec.map(MediaTrack.prettyCodec) ?? ""
+        knownAudioCodec = selectedCodec
         publish { engine in
             engine.audioTracks = audio
             engine.subtitleTracks = subs
             engine.videoCodec = selectedVideoCodec
-            engine.audio.codec = selectedAudio?.codec.map(MediaTrack.prettyCodec) ?? ""
+            engine.audio.codec = selectedCodec
             engine.audio.channels = selectedAudio?.channels ?? 0
             if engine.video.dolbyVisionProfile != dvProfile {
                 engine.video.dolbyVisionProfile = dvProfile

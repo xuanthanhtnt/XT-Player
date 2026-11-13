@@ -15,7 +15,7 @@
 
 ---
 
-## Trạng thái: v0.3.4 — Apple TV có menu ẩn, Cài đặt ngay trong menu và màn hình Đang phát mới; ảnh trang chủ trên Mac hiện ngay
+## Trạng thái: v0.3.5 — Apple TV: menu chỉ mở bằng nút trái và đúng mục đang xem, trang album báo Đang phát
 
 | Hạng mục | Có trong v0.2.1 |
 |---|---|

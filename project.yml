@@ -13,7 +13,7 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "0.3.4"
+    MARKETING_VERSION: "0.3.5"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
     PRODUCT_NAME: XTPlayer
@@ -139,6 +139,22 @@ targets:
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "-"
 
+  # Drives the Apple TV dev build (com.xuanthanhtnt.xtplayer.dev, installed beforehand) with the Siri Remote to
+  # check focus and navigation on a real Apple TV. No target application: the app is launched by bundle id, so the
+  # App Store bundle id is never built or installed by these tests.
+  XTPlayerTVUITests:
+    type: bundle.ui-testing
+    platform: tvOS
+    sources:
+      - path: Tests/XTPlayerTVUITests
+    settings:
+      base:
+        PRODUCT_NAME: XTPlayerTVUITests
+        PRODUCT_MODULE_NAME: XTPlayerTVUITests
+        PRODUCT_BUNDLE_IDENTIFIER: com.xuanthanhtnt.xtplayer.tvuitests
+        INFOPLIST_FILE: ""
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   XTPlayer-iOS:
     build:
@@ -166,3 +182,11 @@ schemes:
       config: Debug
       targets:
         - XTPlayerTests
+  XTPlayerTVUITests:
+    build:
+      targets:
+        XTPlayerTVUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - XTPlayerTVUITests

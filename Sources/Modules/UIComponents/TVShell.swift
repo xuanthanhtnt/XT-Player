@@ -2,8 +2,8 @@ import SwiftUI
 
 #if os(tvOS)
 /// Apple TV navigation. The menu is hidden and the page fills the screen; pressing left at the page's left edge
-/// (or Menu at the top of a page) brings the menu in from the left and shrinks the page to make room. Right, or
-/// picking a section, puts the page back. "Cài đặt" opens a second level in the menu itself: its groups, and the
+/// (or Menu at the top of a page) brings the menu in from the left, on the section being shown, and shrinks the
+/// page to make room. Right, or picking a section, puts the page back. "Cài đặt" opens a second level in the menu itself: its groups, and the
 /// group under the focus shown in a panel beside the menu (no Settings page).
 struct TVShell: View {
     @Binding var section: AppSection
@@ -13,9 +13,13 @@ struct TVShell: View {
     @State private var menuOpen = false
     @State private var settingsOpen = false
     @State private var settingsGroup: SettingsGroup?
-    /// The menu cannot take the focus at launch (the page gets it) or while the menu closes (the focus has to
-    /// go to the page): a disabled button hands it on.
-    @State private var railEnabled = false
+    /// When the page's focus last moved: a left press that moved nothing was at the page's left edge.
+    @State private var lastPageFocusMove = Date.distantPast
+    /// The invisible strip along the left edge that opens the menu when the focus reaches it.
+    @FocusState private var edgeFocused: Bool
+    /// Off at launch and for a moment after the menu closes or the page changes, while the focus settles in
+    /// the page (the strip is the screen's top-left-most focusable and would take it).
+    @State private var edgeEnabled = false
 
     enum RailFocus: Hashable {
         case section(AppSection)
@@ -50,24 +54,51 @@ struct TVShell: View {
                 AppBackground()
                 page
                     .disabled(menuOpen)
+                    .onMoveCommand { direction in
+                        guard direction == .left, !menuOpen else { return }
+                        let pressed = Date()
+                        // Closed, the menu cannot take the focus (up from the top of a page went into it): a left
+                        // press after which the page's focus has not moved opens it instead.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                            if lastPageFocusMove < pressed, !menuOpen { openMenu() }
+                        }
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: UIFocusSystem.didUpdateNotification)) { _ in
+                        if !menuOpen { lastPageFocusMove = Date() }
+                    }
                     // Behind the settings panel the page steps further back.
                     .blur(radius: settingsGroup != nil ? 14 : 0)
                     .brightness(settingsGroup != nil ? -0.4 : menuOpen ? -0.2 : 0)
                     .clipShape(RoundedRectangle(cornerRadius: menuOpen ? 40 : 0, style: .continuous))
                     .scaleEffect(menuOpen ? shrink : 1, anchor: .trailing)
                     .shadow(color: .black.opacity(menuOpen ? 0.6 : 0), radius: 50, x: -16)
+                if !menuOpen {
+                    edgeStrip
+                }
                 if settingsOpen, let group = settingsGroup {
                     settingsPanel(group)
                         .padding(.leading, Self.menuWidth + 20)
                         .transition(.move(edge: .leading).combined(with: .opacity))
                         .zIndex(1)
                 }
-                menu.zIndex(2)
+                if menuOpen {
+                    menu
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                        .zIndex(2)
+                }
             }
         }
         .ignoresSafeArea()
+        .task { await enableEdge(after: 1.0) }
+        .onChange(of: edgeFocused) { _, focused in
+            if focused { openMenu() }
+        }
+        .onChange(of: paths) { _, _ in
+            // A page pushed or popped: its first focus must land in it, not on the strip.
+            edgeEnabled = false
+            Task { await enableEdge(after: 0.7) }
+        }
         .environment(\.dynamicTypeSize, .xSmall)
-        .task { await enableRail(after: 0.8) }
         .animation(.spring(response: 0.42, dampingFraction: 0.88), value: menuOpen)
         .animation(.spring(response: 0.36, dampingFraction: 0.9), value: settingsOpen)
         .animation(.easeInOut(duration: 0.2), value: settingsGroup)
@@ -161,15 +192,9 @@ struct TVShell: View {
             Rectangle()
                 .fill(.ultraThinMaterial)
                 .overlay(Theme.background.opacity(0.6))
-                .opacity(menuOpen ? 1 : 0)
                 .ignoresSafeArea()
         }
-        // Hidden but still focusable while closed: moving left from the page lands here and opens it.
-        .opacity(menuOpen ? 1 : 0.011)
-        .offset(x: menuOpen ? 0 : -40)
         .focusSection()
-        .defaultFocus($focused, settingsOpen && settingsGroup != nil ? .group(settingsGroup!) : .section(section),
-                      priority: .userInitiated)
         .onMoveCommand { direction in
             // Right from a section closes the menu; from the settings groups it goes into their panel.
             guard direction == .right, menuOpen else { return }
@@ -191,7 +216,7 @@ struct TVShell: View {
         }
         .buttonStyle(MenuRowStyle())
         .focused($focused, equals: focus)
-        .disabled(!railEnabled)
+
     }
 
     // MARK: Settings panel
@@ -226,22 +251,35 @@ struct TVShell: View {
 
     private func openMenu() {
         menuOpen = true
-        focused = .section(section)
+        // On the section being shown (the focus engine picked the row nearest the page's focus, often Settings);
+        // the rows are enabled in this update, so the focus is set on the next turn.
+        DispatchQueue.main.async { focused = .section(section) }
     }
 
-    /// Closes the menu and hands the focus to the page: the menu's buttons are disabled for a moment, which
-    /// makes the focus engine move to the (now enabled) page.
+    /// Closes the menu and hands the focus to the page: the menu leaves the screen, so the focus engine moves to
+    /// the (now enabled) page.
     private func closeMenu() {
         menuOpen = false
         settingsOpen = false
         settingsGroup = nil
-        railEnabled = false
-        Task { await enableRail(after: 0.45) }
+        edgeEnabled = false
+        Task { await enableEdge(after: 0.7) }
     }
 
-    private func enableRail(after seconds: Double) async {
+    /// Full height and only a few points wide: nothing is above or below it, so up and down never reach it; left
+    /// from the page's leftmost item does (a card further left in a shelf is nearer and wins).
+    private var edgeStrip: some View {
+        Button {} label: {
+            Color.clear.frame(width: 6).frame(maxHeight: .infinity)
+        }
+        .buttonStyle(EdgeStripStyle())
+        .focused($edgeFocused)
+        .disabled(!edgeEnabled)
+    }
+
+    private func enableEdge(after seconds: Double) async {
         try? await Task.sleep(for: .seconds(seconds))
-        railEnabled = true
+        if !menuOpen { edgeEnabled = true }
     }
 }
 
@@ -278,6 +316,13 @@ private struct MenuRowLabel: View {
         }
         .scaleEffect(isFocused ? 1.04 : 1)
         .animation(.easeOut(duration: 0.16), value: isFocused)
+    }
+}
+
+/// Draws nothing, focused or not.
+private struct EdgeStripStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.contentShape(Rectangle())
     }
 }
 

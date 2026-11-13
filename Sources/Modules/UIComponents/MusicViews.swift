@@ -311,7 +311,14 @@ struct AlbumDetailView: View {
                 if let artist = album.artist { Text(artist).font(.title3).foregroundStyle(Theme.leaf) }
                 Text(summary(album, tracks: tracks)).font(.callout).foregroundStyle(.secondary)
                 HStack(spacing: 12) {
-                    Button { playAlbum(album, tracks: tracks, from: 0) } label: { Label("Phát", systemImage: "play.fill") }
+                    // While this album plays the button says so and opens Now Playing instead of starting over.
+                    if tracks.contains(where: { $0.key == music.current?.key }) {
+                        Button { music.showsNowPlaying = true } label: {
+                            Label("Đang phát", systemImage: "waveform")
+                        }
+                    } else {
+                        Button { playAlbum(album, tracks: tracks, from: 0) } label: { Label("Phát", systemImage: "play.fill") }
+                    }
                     Button { music.play(PlaybackFactory.library(tracks, item: album, context: context), shuffle: true, context: context) } label: {
                         Label("Trộn bài", systemImage: "shuffle")
                     }
@@ -387,7 +394,9 @@ private struct TrackRow: View {
                 }
             }
             .font(.callout.monospacedDigit())
-            .frame(width: 30, alignment: .trailing)
+            .fixedSize()
+            // Wide enough for the speaker (it was cut in half in 30 pt at the Apple TV's type size).
+            .frame(width: Self.numberWidth, alignment: .trailing)
             Text(title).font(.body.weight(playing ? .semibold : .regular)).lineLimit(1)
                 .foregroundStyle(playing ? Theme.leaf : .primary)
             Spacer(minLength: 8)
@@ -398,6 +407,12 @@ private struct TrackRow: View {
         .padding(.vertical, 10)
         .contentShape(Rectangle())
     }
+
+    #if os(tvOS)
+    static let numberWidth: CGFloat = 52
+    #else
+    static let numberWidth: CGFloat = 30
+    #endif
 }
 
 // MARK: - Artists
