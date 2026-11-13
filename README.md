@@ -15,7 +15,7 @@
 
 ---
 
-## Trạng thái: v0.3.5 — Apple TV: menu chỉ mở bằng nút trái và đúng mục đang xem, trang album báo Đang phát
+## Trạng thái: v0.3.6 — trang album: nút Đang phát / Tiếp tục / Phát lại theo trạng thái phát
 
 | Hạng mục | Có trong v0.2.1 |
 |---|---|

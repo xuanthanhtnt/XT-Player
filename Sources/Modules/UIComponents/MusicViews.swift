@@ -212,8 +212,8 @@ struct MusicLibraryView: View {
                     .pickerStyle(.segmented)
                     .frame(maxWidth: 480)
                     #if os(tvOS)
-                    if music.isActive {
-                        Button { music.showsNowPlaying = true } label: { Label("Đang phát", systemImage: "waveform") }
+                    if music.isActive, let engine = music.engine {
+                        NowPlayingShortcut(engine: engine)
                     }
                     #endif
                 }
@@ -311,11 +311,9 @@ struct AlbumDetailView: View {
                 if let artist = album.artist { Text(artist).font(.title3).foregroundStyle(Theme.leaf) }
                 Text(summary(album, tracks: tracks)).font(.callout).foregroundStyle(.secondary)
                 HStack(spacing: 12) {
-                    // While this album plays the button says so and opens Now Playing instead of starting over.
-                    if tracks.contains(where: { $0.key == music.current?.key }) {
-                        Button { music.showsNowPlaying = true } label: {
-                            Label("Đang phát", systemImage: "waveform")
-                        }
+                    // While this album is the one playing, the button follows it instead of starting over.
+                    if tracks.contains(where: { $0.key == music.current?.key }), let engine = music.engine {
+                        NowPlayingShortcut(engine: engine)
                     } else {
                         Button { playAlbum(album, tracks: tracks, from: 0) } label: { Label("Phát", systemImage: "play.fill") }
                     }
@@ -374,6 +372,32 @@ struct AlbumDetailView: View {
     #else
     static let cover: CGFloat = 200
     #endif
+}
+
+/// "Đang phát" (opens Now Playing) while the music plays, "Tiếp tục" (resumes it) once paused, "Phát lại" when
+/// the queue has ended. It watches the engine itself: the page around it only hears of track changes, so the
+/// label stayed on "Đang phát" after a pause.
+private struct NowPlayingShortcut: View {
+    @ObservedObject var engine: MPVPlayerEngine
+
+    var body: some View {
+        let music = MusicPlayer.shared
+        switch engine.state {
+        case .paused, .ended:
+            Button {
+                music.togglePause()
+                #if os(tvOS)
+                music.showsNowPlaying = true
+                #endif
+            } label: {
+                Label(engine.state == .ended ? "Phát lại" : "Tiếp tục", systemImage: "play.fill")
+            }
+        default:
+            Button { music.showsNowPlaying = true } label: {
+                Label("Đang phát", systemImage: "waveform")
+            }
+        }
+    }
 }
 
 private struct TrackRow: View {
